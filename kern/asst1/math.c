@@ -41,6 +41,12 @@ struct semaphore *finished;
  * **********************************************************************
  */
 
+/* 
+ * create semaphore called mutex to allow threads 
+ * to enter the critical region, 
+ */
+struct semaphore * mutex;
+
 
 
 /*
@@ -80,19 +86,26 @@ static void adder(void * unusedpointer, unsigned long addernumber)
                 /* loop doing increments until we achieve the overall number
                    of increments */
 
+                /* entring the critical region */
+                P(mutex);
                 a = counter;
                 if (a < NADDS) {
-
+                        // kprintf("HI, I'm %ld \n",counter);
                         counter = counter + 1;
 
                         math_test_1(addernumber); /* We use this for testing, please leave this here. */
 
                         b = counter;
 
+
+                        /* leaving the critical region */
+                        V(mutex);
+
                         math_test_2(addernumber); /* We use this for testing, please leave this here.
                                                    * Also note it should NOT execute mutually exclusively
                                                    */
-
+                        
+                        /* leaving the CR */
                         /*
                          * now count the number of increments we perform  for statistics.
                          * addernumber is effectively the thread number of this thread.
@@ -110,6 +123,7 @@ static void adder(void * unusedpointer, unsigned long addernumber)
                         }
                 } else {
                         flag = 0;
+                        // kprintf("BYE\n");
                 }
         }
 
@@ -161,6 +175,15 @@ int maths (int data1, char **data2)
          * INSERT ANY INITIALISATION CODE YOU REQUIRE HERE
          * ********************************************************************
          */
+ 
+        /* 
+         * initial count should be 1
+         * to avoid immediate sleep
+         */
+        mutex = sem_create("mutex", 1);
+        if (mutex == NULL) {
+                panic("maths: sem create failed");
+        }
 
 
         /*
@@ -172,7 +195,6 @@ int maths (int data1, char **data2)
         for (index = 0; index < NADDERS; index++) {
 
                 error = thread_fork("adder thread", NULL, &adder, NULL, index);
-
                 /*
                  * panic() on error as we can't progress if we can't create threads.
                  */
@@ -183,15 +205,20 @@ int maths (int data1, char **data2)
                 }
         }
 
-
+        
         /*
          * Wait until the adder threads complete by waiting on
          * the semaphore NADDER times.
          */
-
-        for (index = 0; index < NADDERS; index++) {
-                P(finished);
-        }
+        
+        /* 
+         * for (index = 0; index < NADDERS; index++) {
+         *         kprintf("\nSLEEP\n");
+         *         P(finished);
+         * }
+         */
+        
+        P(finished);
 
         kprintf("Adder threads performed %ld adds\n", counter);
 
@@ -209,6 +236,7 @@ int maths (int data1, char **data2)
          * INSERT ANY CLEANUP CODE YOU REQUIRE HERE
          * **********************************************************************
          */
+        sem_destroy(mutex);
 
 
         /* clean up the semaphore we allocated earlier */
