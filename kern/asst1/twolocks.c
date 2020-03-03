@@ -92,8 +92,10 @@ static void ben(void * unusedpointer, unsigned long unusedint)
 
                 lock_release(locka);
 
-                lock_acquire(lockb);
+                /* change the order of a&b to avoid a deadlock */
+                // lock_acquire(lockb);
                 lock_acquire(locka);
+                lock_acquire(lockb);
 
                                         /* Ben now holds both locks and can do
                                          what ever ben needs to do while holding
