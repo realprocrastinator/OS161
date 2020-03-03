@@ -232,15 +232,13 @@ run_producerconsumer(int nargs, char **args)
 {
         (void) nargs; /* Avoid "unused variable" warning */
         (void) args;
-
         kprintf("run_producerconsumer: starting up\n");
-
         /* Initialise synch primitives used in this simulator */
         consumer_finished = sem_create("consumer_finished", 0);
         if(!consumer_finished) {
                 panic("run_producerconsumer: couldn't create semaphore\n");
         }
-
+        
         producer_finished = sem_create("producer_finished", 0);
         if(!producer_finished ) {
                 panic("run_producerconsumer: couldn't create semaphore\n");
@@ -248,7 +246,7 @@ run_producerconsumer(int nargs, char **args)
 
         /* Run any code required to initialise synch primitives etc */
         producerconsumer_startup();
-
+        
         /* Run the simulation */
         start_consumer_threads();
         start_producer_threads();

@@ -236,6 +236,8 @@ int maths (int data1, char **data2)
          * INSERT ANY CLEANUP CODE YOU REQUIRE HERE
          * **********************************************************************
          */
+
+        /* clean up the semaphore we allocated earlier */
         sem_destroy(mutex);
 
 
