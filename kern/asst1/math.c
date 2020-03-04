@@ -123,7 +123,9 @@ static void adder(void * unusedpointer, unsigned long addernumber)
                         }
                 } else {
                         flag = 0;
-                        // kprintf("BYE\n");
+                        /* should put V(mutex) here */
+                        V(mutex);
+
                 }
         }
 
