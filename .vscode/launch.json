@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "OS161",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "~/cs3231/root/kernel",
+            "cwd": "~/cs3231/root",
+            "miDebuggerServerAddress": "unix:.sockets/gdb",
+            "miDebuggerPath": "/usr/local/bin/os161-gdb",
+            "stopAtEntry": true,
+            "logging": { "trace": true, "traceResponse": true },
+            "setupCommands": [
+                {
+                    "description": "Directory for assembler",
+                    "text": "directory /root/cs3231/asst2-src/kern/compile/ASST2",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "launchCompleteCommand": "None"
+        }
+    ]
+}
