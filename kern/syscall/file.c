@@ -122,31 +122,17 @@ int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
     if(result)
         goto finish;
 
-    // look for empty FD available (we start from the existing allocated FD first)
-    // vfs_open (mode is hardcoded!)
-    ssize_t fd = curproc->p_maxfh;
-    if((size_t)fd >= curproc->p_fh_cap) {
-        // in this case, we'll have to reallocate. OTOH, the newly allocated area 
-        // is guaranteed to be empty. 
+    // look for empty FD available
+    size_t fd;
+    for(fd = 0; fd < curproc->p_maxfh && curproc->p_fh[fd].vnode; ++fd) {}
+
+    // reallocate if needed!
+    if(fd >= curproc->p_fh_cap) {
         result = grow_pfh();
         if(result)
             goto finish;
-    } else {
-        while(fd >= 0 && curproc->p_fh[fd].vnode)
-            fd--;
     }
     
-    // OK, no free FD found. Let's use the next space.
-    if(fd < 0) {
-        fd = curproc->p_maxfh;
-        // reallocate if needed!
-        if((size_t)fd >= curproc->p_fh_cap) {
-            result = grow_pfh();
-            if(result)
-                goto finish;
-        }
-    }
-
     // let VFS does it's job!
     result = vfs_open(kfilename, flags, 0, &curproc->p_fh[fd].vnode);
     if(result) {
@@ -157,7 +143,7 @@ int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
     curproc->p_fh[fd].curr_offset = 0;
     
     // update stats
-    if((size_t)fd >= (curproc->p_maxfh))
+    if(fd >= (curproc->p_maxfh))
         curproc->p_maxfh = fd + 1;
     *out_fd = fd;
 
