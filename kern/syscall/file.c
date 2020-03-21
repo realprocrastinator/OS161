@@ -26,21 +26,80 @@ void* kiobuff;
 
 #define curas (curproc->p_addrspace)
 
-#define RW_BUFF_SZ 64
+#define RW_BUFF_SZ 3
 
+/*helper functions*/
 inline size_t max(size_t a, size_t b);
 
 inline size_t min(size_t a, size_t b);
 
-size_t max(size_t a, size_t b) {
-    return a > b ? a : b;
+int grow_pfh(void);
+
+/*syscall handler functions*/
+
+int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
+    int result = 0;
+    size_t filename_len;
+
+    // seriously??
+    if(curproc->p_maxfh >= 0x8000000)
+        return EMFILE;
+    
+    // ensure that the buffer passed is correct!
+    // we'll store this in heap to avoid overfilling the stack :(
+    char* kfilename = kmalloc(PATH_MAX);
+    // no idea why does this happen, but end up gracefully!
+    if(!kfilename)
+        return ENOMEM;
+    
+    result = copyinstr(filename, kfilename, PATH_MAX, &filename_len);
+    if(result)
+        goto finish;
+
+    // look for empty FD available (we start from the existing allocated FD first)
+    // vfs_open (mode is hardcoded!)
+    ssize_t fd = curproc->p_maxfh;
+    if((size_t)fd >= curproc->p_fh_cap) {
+        // in this case, we'll have to reallocate. OTOH, the newly allocated area 
+        // is guaranteed to be empty. 
+        result = grow_pfh();
+        if(result)
+            goto finish;
+    } else {
+        while(fd >= 0 && curproc->p_fh[fd])
+            fd--;
+    }
+    
+    // OK, no free FD found. Let's use the next space.
+    if(fd < 0) {
+        fd = curproc->p_maxfh;
+        // reallocate if needed!
+        if((size_t)fd >= curproc->p_fh_cap) {
+            result = grow_pfh();
+            if(result)
+                goto finish;
+        }
+    }
+
+    // let VFS does it's job!
+    result = vfs_open(kfilename, flags, 0, curproc->p_fh + fd);
+    if(result) {
+        curproc->p_fh[fd] = 0;
+        goto finish;
+    }
+    
+    // update stats
+    if((size_t)fd >= (curproc->p_maxfh))
+        curproc->p_maxfh = fd + 1;
+    *out_fd = fd;
+
+finish:
+    // don't forget not to leak memory!
+    kfree(kfilename);
+    return result;
 }
 
-size_t min(size_t a, size_t b) {
-    return a < b ? a : b;
-}
-
-int sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written) {
+int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written) {
     // in-stack kernel buffer area!
     struct iovec iov, uiov;
 	struct uio ku, uu;
@@ -48,7 +107,7 @@ int sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written) 
     int result, to_write;
 
     // at the moment we only support the stdin,stdout,stderr trio!
-    if(filehandle > 2) {
+    if((size_t)filehandle >= curproc->p_fh_cap || !curproc->p_fh[filehandle]) {
         return EBADF;
     }
 
@@ -76,24 +135,55 @@ int sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written) 
         ku.uio_resid = iov.iov_len = to_write;
         ku.uio_offset = 0;
 
-        // move from user space to kernel buffer
-        result = uiomove(kbuff, to_write, &uu);
-        if(result) {
-            return result;
-        }
-
         // ask the VFS to do its job!
-        if(write)
+        if(write) {
+            // copy the data from user ptr to kernel ptr, then write to VOP
+            result = uiomove(kbuff, to_write, &uu);
+            if(result)
+                return result;
             result = VOP_WRITE(curproc->p_fh[filehandle], &ku);
-        else
+        } else {
+            // read from VOP first, then copy the data to user ptr
             result = VOP_READ(curproc->p_fh[filehandle], &ku);
+            if(result)
+                return result;
+            result = uiomove(kbuff, ku.uio_offset, &uu);
+        }
         if(result) {
             return result;
         }
 
         // successfully written this segment
-        *written += to_write;
+        *written += ku.uio_offset;
+
+        // check whether our requested IO ammount is completed successfully
+        // if that's not the case, stop
+        if(ku.uio_offset < to_write)
+            break;
     }
     
     return result;
+}
+
+/*helper functions declarations*/
+size_t max(size_t a, size_t b) {
+    return a > b ? a : b;
+}
+
+size_t min(size_t a, size_t b) {
+    return a < b ? a : b;
+}
+
+int grow_pfh(void) {
+    // realloc!
+    size_t new_fh_cap = (curproc->p_fh_cap + P_FH_INC) * sizeof(struct vnode*);
+    struct vnode** p_fh_new = kmalloc(new_fh_cap);
+    // why??? OK, bail out gracefully!
+    if(!p_fh_new)
+        return EMFILE;
+    // TODO: copy old table
+    // TODO: zero out
+    // TODO: free old table
+    // TODO: update p_fh_cap
+    return 0;
 }

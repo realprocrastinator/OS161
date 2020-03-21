@@ -44,6 +44,7 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <file.h>
 // for debug
 #include <uio.h>
 #include <vnode.h>
@@ -100,7 +101,10 @@ runprogram(char *progname)
 		return result;
 	}
 
-	/* TEST CODE - open consoles */
+	/* In this part, we assume that the process is newly created.
+	   Therefore, we expect the p_fh tables to be empty.
+	 */
+	KASSERT(curproc->p_fh_cap >= 3);
 	const char* console_name = "con:";
 	char fnopen[5];
 	// stdin (0)
@@ -124,6 +128,8 @@ runprogram(char *progname)
 		kprintf("Failed to open stderr");
 		return result;
 	}
+	// update the p_fh metadata
+	curproc->p_maxfh = 3;
 
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
