@@ -16,6 +16,7 @@
 #include <copyinout.h>
 #include <proc.h>
 #include <addrspace.h>
+#include <stat.h>
 
 /*
  * Add your file-related functions here ...
@@ -36,6 +37,70 @@ inline size_t min(size_t a, size_t b);
 int grow_pfh(void);
 
 /*syscall handler functions*/
+
+off_t a2_sys_lseek(int fd, off_t offset, int whence, int* retval){
+    int result = 0;
+    int new_offset;
+    struct stat *file_st = NULL;
+    struct vnode * vn = curproc->p_fh[fd].vnode;
+
+    /* if FD is invalid or vnode is NULL */
+    if((size_t)fd >= curproc->p_fh_cap || !vn) {
+        result = EBADF;
+        goto badresult;
+    }
+
+    /* if the vnode is not seekable */
+    if(!VOP_ISSEEKABLE(vn)){
+        /* operation not permitted or ESPIPE?*/
+        result = ESPIPE;
+        goto badresult;
+    }
+
+    /* make sure the offset given by user is valid */
+    if(offset < 0){
+        result = EINVAL;
+        goto badresult;
+    }
+
+    /* get the current position of the file data and it's actually the end of the file*/
+    int currpos = curproc->p_fh[fd].curr_offset;
+
+    /* set cursor at the begining of the file */
+    
+    switch( whence ) {
+		case SEEK_SET:
+            new_offset = offset;
+			break;
+		
+		case SEEK_CUR:
+			new_offset = currpos + offset;
+			break;
+
+		case SEEK_END:
+			//if it is SEEK_END, we use VOP_STAT to figure out
+			//the size of the file, and set the offset to be that size.
+			result = VOP_STAT( vn, file_st );
+            if (result){
+                return result;
+            }
+			//set the offet to the filesize.
+			new_offset = file_st->st_size + offset;
+			break;
+		default:
+			result = EINVAL;
+	}
+    
+    /* no match flag! */
+    /* update the phf_data structure */
+    curproc->p_fh[fd].curr_offset = new_offset;
+    *retval = new_offset;
+    return result;
+
+badresult:
+    *retval = -1;
+    return result;
+}
 
 int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
     int result = 0;
@@ -101,6 +166,22 @@ finish:
     return result;
 }
 
+int a2_sys_close(int fd) {
+    // the same code as from a2_sys_rw below!
+    if((size_t)fd >= curproc->p_fh_cap || !curproc->p_fh[fd].vnode) {
+        return EBADF;
+    }
+
+    // VFS' job again! This time, no error indicator, so we will assume this
+    // operation is always success! besides, it is specified in POSIX anyway.
+    vfs_close(curproc->p_fh[fd].vnode);
+
+    // reset our data struct
+    memset(curproc->p_fh + fd, 0, sizeof(struct pfh_data));
+
+    return 0;
+}
+
 int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written) {
     // in-stack kernel buffer area!
     struct iovec iov, uiov;
@@ -144,6 +225,9 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
             if(result)
                 return result;
             result = VOP_WRITE(curproc->p_fh[filehandle].vnode, &ku);
+            if (result){
+                return result;
+            }
             currwritten = to_write - ku.uio_resid;
         } else {
             // read from VOP first, then copy the data to user ptr

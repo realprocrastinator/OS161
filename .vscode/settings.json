@@ -1,0 +1,31 @@
+{
+    "files.associations": {
+        "vfs.h": "c",
+        "unistd.h": "c",
+        "reboot.h": "c",
+        "atomic": "c",
+        "*.tcc": "c",
+        "fstream": "c",
+        "sstream": "c",
+        "exception": "c",
+        "memory_resource": "c",
+        "iosfwd": "c",
+        "new": "c",
+        "ostream": "c",
+        "streambuf": "c",
+        "istream": "c",
+        "limits": "c",
+        "vnode.h": "c",
+        "uio.h": "c",
+        "fs.h": "c",
+        "file.h": "c",
+        "limits.h": "c",
+        "array": "cpp",
+        "proc.h": "c",
+        "types.h": "c",
+        "device.h": "c",
+        "lib.h": "c",
+        "sfs.h": "c",
+        "sfsprivate.h": "c"
+    }
+}

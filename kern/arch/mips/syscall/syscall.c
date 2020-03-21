@@ -111,8 +111,14 @@ syscall(struct trapframe *tf)
 		break;
 
 	    /* Add stuff here */
+		case SYS_lseek:
+			err = a2_sys_lseek(tf->tf_a0, tf->tf_a1, tf->tf_a2, &retval);
+			break;
 		case SYS_open:
 			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
+			break;
+		case SYS_close:
+			err = a2_sys_close(tf->tf_a0);
 			break;
 		case SYS_write:
 			err = a2_sys_rw(tf->tf_a0, 1, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
