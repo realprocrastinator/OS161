@@ -26,7 +26,7 @@ void* kiobuff;
 
 #define curas (curproc->p_addrspace)
 
-#define RW_BUFF_SZ 3
+#define RW_BUFF_SZ 8
 
 /*helper functions*/
 inline size_t max(size_t a, size_t b);
@@ -106,15 +106,15 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
     struct iovec iov, uiov;
 	struct uio ku, uu;
     char kbuff[RW_BUFF_SZ];
-    int result, to_write;
+    int result;
+    size_t currwritten, to_write;
 
-    // at the moment we only support the stdin,stdout,stderr trio!
     if((size_t)filehandle >= curproc->p_fh_cap || !curproc->p_fh[filehandle].vnode) {
         return EBADF;
     }
 
     // init kernel IOV data structure
-    uio_kinit(&iov, &ku, kbuff, RW_BUFF_SZ, 0, write ? UIO_WRITE : UIO_READ);
+    uio_kinit(&iov, &ku, kbuff, RW_BUFF_SZ, curproc->p_fh[filehandle].curr_offset, write ? UIO_WRITE : UIO_READ);
 
     // init passed-in user buffer IOV
     // the last param, the READ/WRITE, is based on user's perspective
@@ -135,7 +135,7 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
         // reset kernel IOV
         iov.iov_kbase = kbuff;
         ku.uio_resid = iov.iov_len = to_write;
-        ku.uio_offset = 0;
+        // ku.uio_offset = curproc->p_fh[filehandle].curr_offset;
 
         // ask the VFS to do its job!
         if(write) {
@@ -144,23 +144,26 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
             if(result)
                 return result;
             result = VOP_WRITE(curproc->p_fh[filehandle].vnode, &ku);
+            currwritten = to_write - ku.uio_resid;
         } else {
             // read from VOP first, then copy the data to user ptr
             result = VOP_READ(curproc->p_fh[filehandle].vnode, &ku);
             if(result)
                 return result;
-            result = uiomove(kbuff, ku.uio_offset, &uu);
+            currwritten = to_write - ku.uio_resid;
+            result = uiomove(kbuff, currwritten, &uu);
         }
         if(result) {
             return result;
         }
 
         // successfully written this segment
-        *written += ku.uio_offset;
+        // how many write minus how many remaining
+        *written += currwritten;
+        curproc->p_fh[filehandle].curr_offset += currwritten;
 
-        // check whether our requested IO ammount is completed successfully
-        // if that's not the case, stop
-        if(ku.uio_offset < to_write)
+        // stop if written partially (could be EOF, buffer full, etc.)
+        if(currwritten < to_write)
             break;
     }
     
