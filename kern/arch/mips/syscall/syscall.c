@@ -35,6 +35,7 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include <file.h>
 
 
 /*
@@ -110,7 +111,15 @@ syscall(struct trapframe *tf)
 		break;
 
 	    /* Add stuff here */
-
+		case SYS_open:
+			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
+			break;
+		case SYS_write:
+			err = a2_sys_rw(tf->tf_a0, 1, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
+			break;
+		case SYS_read:
+			err = a2_sys_rw(tf->tf_a0, 0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
+			break;
 	    default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;

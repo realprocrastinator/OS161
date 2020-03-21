@@ -59,6 +59,16 @@ struct vnode;
  * thread_switch needs to be able to fetch the current address space
  * without sleeping.
  */
+
+/* Alpaca's defiend constants */
+/* number of increments for p_fh */
+#define P_FH_INC 4
+
+struct pfh_data {
+	struct vnode* vnode;
+	off_t curr_offset;
+};
+
 struct proc {
 	char *p_name;			/* Name of this process */
 	struct spinlock p_lock;		/* Lock for this structure */
@@ -71,6 +81,10 @@ struct proc {
 	struct vnode *p_cwd;		/* current working directory */
 
 	/* add more material here as needed */
+	/* per-process file handle table section */
+	size_t p_maxfh; /* maximum fh opened, +1 */
+	size_t p_fh_cap; /* capacity of the file handle array */
+	struct pfh_data* p_fh;
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

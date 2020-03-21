@@ -44,6 +44,10 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <file.h>
+// for debug
+#include <uio.h>
+#include <vnode.h>
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -96,6 +100,36 @@ runprogram(char *progname)
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
+
+	/* In this part, we assume that the process is newly created.
+	   Therefore, we expect the p_fh tables to be empty.
+	 */
+	KASSERT(curproc->p_fh_cap >= 3);
+	const char* console_name = "con:";
+	char fnopen[5];
+	// stdin (0)
+	memcpy(fnopen, console_name, 5);
+	result = vfs_open(fnopen, O_RDONLY, 0, &curproc->p_fh[0].vnode);
+	if(result) {
+		kprintf("Failed to open stdin");
+		return result;
+	}
+	// stdout (1)
+	memcpy(fnopen, console_name, 5);
+	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[1].vnode);
+	if(result) {
+		kprintf("Failed to open stdout");
+		return result;
+	}
+	// stderr (2)
+	memcpy(fnopen, console_name, 5);
+	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[2].vnode);
+	if(result) {
+		kprintf("Failed to open stderr");
+		return result;
+	}
+	// update the p_fh metadata
+	curproc->p_maxfh = 3;
 
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
