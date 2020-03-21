@@ -85,11 +85,10 @@ proc_create(const char *name)
 	/* FH fields */
 	proc->p_fh_cap = P_FH_INC;
 	proc->p_maxfh = 0;
-	proc->p_fh = kmalloc(P_FH_INC * sizeof(struct vnode*));
+	proc->p_fh = kmalloc(P_FH_INC * sizeof(struct pfh_data));
 	// don't forget to zero out the table!
-	for(int i=0; i<P_FH_INC; ++i)
-		proc->p_fh[i] = 0;
-
+	memset(proc->p_fh, 0, sizeof(struct pfh_data) * P_FH_INC);
+	
 	return proc;
 }
 

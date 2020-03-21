@@ -66,7 +66,7 @@ int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
         if(result)
             goto finish;
     } else {
-        while(fd >= 0 && curproc->p_fh[fd])
+        while(fd >= 0 && curproc->p_fh[fd].vnode)
             fd--;
     }
     
@@ -82,11 +82,13 @@ int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
     }
 
     // let VFS does it's job!
-    result = vfs_open(kfilename, flags, 0, curproc->p_fh + fd);
+    result = vfs_open(kfilename, flags, 0, &curproc->p_fh[fd].vnode);
     if(result) {
-        curproc->p_fh[fd] = 0;
+        curproc->p_fh[fd].vnode = 0;
         goto finish;
     }
+    // start from the beginning!
+    curproc->p_fh[fd].curr_offset = 0;
     
     // update stats
     if((size_t)fd >= (curproc->p_maxfh))
@@ -107,7 +109,7 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
     int result, to_write;
 
     // at the moment we only support the stdin,stdout,stderr trio!
-    if((size_t)filehandle >= curproc->p_fh_cap || !curproc->p_fh[filehandle]) {
+    if((size_t)filehandle >= curproc->p_fh_cap || !curproc->p_fh[filehandle].vnode) {
         return EBADF;
     }
 
@@ -141,10 +143,10 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
             result = uiomove(kbuff, to_write, &uu);
             if(result)
                 return result;
-            result = VOP_WRITE(curproc->p_fh[filehandle], &ku);
+            result = VOP_WRITE(curproc->p_fh[filehandle].vnode, &ku);
         } else {
             // read from VOP first, then copy the data to user ptr
-            result = VOP_READ(curproc->p_fh[filehandle], &ku);
+            result = VOP_READ(curproc->p_fh[filehandle].vnode, &ku);
             if(result)
                 return result;
             result = uiomove(kbuff, ku.uio_offset, &uu);
@@ -176,14 +178,24 @@ size_t min(size_t a, size_t b) {
 
 int grow_pfh(void) {
     // realloc!
-    size_t new_fh_cap = (curproc->p_fh_cap + P_FH_INC) * sizeof(struct vnode*);
-    struct vnode** p_fh_new = kmalloc(new_fh_cap);
+    size_t old_fh_cap = (curproc->p_fh_cap) * sizeof(struct pfh_data);
+    size_t new_fh_cap = (curproc->p_fh_cap + P_FH_INC) * sizeof(struct pfh_data);
+    struct pfh_data* p_fh_new = kmalloc(new_fh_cap);
     // why??? OK, bail out gracefully!
     if(!p_fh_new)
         return EMFILE;
-    // TODO: copy old table
-    // TODO: zero out
-    // TODO: free old table
-    // TODO: update p_fh_cap
+    
+    // copy old table
+    memcpy(p_fh_new, curproc->p_fh, old_fh_cap);
+
+    // zero out the remaining
+    memset(p_fh_new + curproc->p_fh_cap, 0, new_fh_cap - old_fh_cap);
+
+    // free old table
+    kfree(curproc->p_fh);
+
+    // update p_fh_cap
+    curproc->p_fh = p_fh_new;
+
     return 0;
 }

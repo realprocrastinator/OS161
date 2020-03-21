@@ -109,21 +109,21 @@ runprogram(char *progname)
 	char fnopen[5];
 	// stdin (0)
 	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_RDONLY, 0, curproc->p_fh);
+	result = vfs_open(fnopen, O_RDONLY, 0, &curproc->p_fh[0].vnode);
 	if(result) {
 		kprintf("Failed to open stdin");
 		return result;
 	}
 	// stdout (1)
 	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_WRONLY, 0, curproc->p_fh + 1);
+	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[1].vnode);
 	if(result) {
 		kprintf("Failed to open stdout");
 		return result;
 	}
 	// stderr (2)
 	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_WRONLY, 0, curproc->p_fh + 2);
+	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[2].vnode);
 	if(result) {
 		kprintf("Failed to open stderr");
 		return result;
