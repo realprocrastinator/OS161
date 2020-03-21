@@ -266,7 +266,7 @@ size_t min(size_t a, size_t b) {
 int grow_pfh(void) {
     // realloc!
     size_t old_fh_cap = (curproc->p_fh_cap) * sizeof(struct pfh_data);
-    size_t new_fh_cap = (curproc->p_fh_cap + P_FH_INC) * sizeof(struct pfh_data);
+    size_t new_fh_cap = old_fh_cap + P_FH_INC * sizeof(struct pfh_data);
     struct pfh_data* p_fh_new = kmalloc(new_fh_cap);
     // why??? OK, bail out gracefully!
     if(!p_fh_new)
@@ -283,6 +283,7 @@ int grow_pfh(void) {
 
     // update p_fh_cap
     curproc->p_fh = p_fh_new;
+    curproc->p_fh_cap += P_FH_INC;
 
     return 0;
 }
