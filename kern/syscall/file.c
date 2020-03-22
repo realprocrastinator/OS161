@@ -17,6 +17,7 @@
 #include <proc.h>
 #include <addrspace.h>
 #include <stat.h>
+#include <endian.h>
 
 /*
  * Add your file-related functions here ...
@@ -38,9 +39,9 @@ int grow_pfh(void);
 
 /*syscall handler functions*/
 
-off_t a2_sys_lseek(int fd, off_t offset, int whence, int* retval){
+off_t a2_sys_lseek(int fd, off_t offset, int32_t* whence, int64_t* retval64){
     int result = 0;
-    int new_offset;
+    off_t new_offset;
     struct stat *file_st = NULL;
     struct vnode * vn = curproc->p_fh[fd].vnode;
 
@@ -68,7 +69,7 @@ off_t a2_sys_lseek(int fd, off_t offset, int whence, int* retval){
 
     /* set cursor at the begining of the file */
     
-    switch( whence ) {
+    switch( *whence ) {
 		case SEEK_SET:
             new_offset = offset;
 			break;
@@ -94,11 +95,11 @@ off_t a2_sys_lseek(int fd, off_t offset, int whence, int* retval){
     /* no match flag! */
     /* update the phf_data structure */
     curproc->p_fh[fd].curr_offset = new_offset;
-    *retval = new_offset;
+    *retval64 = new_offset;
     return result;
 
 badresult:
-    *retval = -1;
+    *retval64 = -1;
     return result;
 }
 

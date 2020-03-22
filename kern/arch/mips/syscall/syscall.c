@@ -36,6 +36,7 @@
 #include <current.h>
 #include <syscall.h>
 #include <file.h>
+#include <endian.h>
 
 
 /*
@@ -81,6 +82,9 @@ syscall(struct trapframe *tf)
 {
 	int callno;
 	int32_t retval;
+	/* only for lseek */
+	int64_t retval64;
+	bool flag64 = false;
 	int err;
 
 	KASSERT(curthread != NULL);
@@ -99,6 +103,8 @@ syscall(struct trapframe *tf)
 	 */
 
 	retval = 0;
+	off_t offset;
+	int32_t *whence;
 
 	switch (callno) {
 	    case SYS_reboot:
@@ -112,7 +118,11 @@ syscall(struct trapframe *tf)
 
 	    /* Add stuff here */
 		case SYS_lseek:
-			err = a2_sys_lseek(tf->tf_a0, tf->tf_a1, tf->tf_a2, &retval);
+			/* get whence from sp+16 */
+			whence = (int32_t *)(tf->tf_sp + 16);
+			join32to64((uint32_t) tf->tf_a2, (uint32_t) tf->tf_a3, (uint64_t *)&offset);
+			err = a2_sys_lseek(tf->tf_a0, offset, whence, &retval64);
+			flag64 = true;
 			break;
 		case SYS_open:
 			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
@@ -141,6 +151,11 @@ syscall(struct trapframe *tf)
 		 */
 		tf->tf_v0 = err;
 		tf->tf_a3 = 1;      /* signal an error */
+	}
+	else if(flag64){
+		/* we need to handle 64-bits retval */
+		tf->tf_a3 = 0;      /* signal no error */
+		split64to32(retval64,&tf->tf_v1,&tf->tf_v0); 
 	}
 	else {
 		/* Success. */
