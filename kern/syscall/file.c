@@ -44,7 +44,7 @@ int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whenc
     /* off_t are 64 bit signed integers */
     off_t offset; /* old offset */
     off_t new_offset;
-    struct stat *file_st = NULL;
+    struct stat file_st;
     struct vnode * vn = curproc->p_fh[fd].vnode;
     int32_t whence_val;
 
@@ -78,12 +78,12 @@ int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whenc
 		case SEEK_END:
 			//if it is SEEK_END, we use VOP_STAT to figure out
 			//the size of the file, and set the offset to be that size.
-			result = VOP_STAT( vn, file_st );
-            if (result){
+			result = VOP_STAT( vn, &file_st );
+            if (result)
                 return result;
-            }
+            
 			//set the offet to the filesize.
-			new_offset = file_st->st_size + offset;
+			new_offset = file_st.st_size + offset;
 			break;
 		default:
 			return EINVAL;
