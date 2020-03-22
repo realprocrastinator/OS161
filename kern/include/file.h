@@ -18,7 +18,7 @@
 /*
  * Put your function declarations and data types here ...
  */
-
+int a2_sys_dup2(int oldfd,int newfd,int *outfd);
 int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64);
 int a2_sys_open(userptr_t filename, int flags, int* out_fd);
 int a2_sys_close(int fd);

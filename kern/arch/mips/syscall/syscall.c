@@ -115,6 +115,9 @@ syscall(struct trapframe *tf)
 		break;
 
 	    /* Add stuff here */
+		case SYS_dup2:
+			err = a2_sys_dup2(tf->tf_a0,tf->tf_a1,&retval);
+			break;
 		case SYS_lseek:
 			/* get whence from sp+16 */
 			err = a2_sys_lseek(tf->tf_a0, tf->tf_a2, tf->tf_a3,

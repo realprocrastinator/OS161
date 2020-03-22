@@ -37,6 +37,7 @@
  */
 
 #include <spinlock.h>
+#include <limits.h>
 
 struct addrspace;
 struct thread;
@@ -85,6 +86,7 @@ struct proc {
 	size_t p_maxfh; /* maximum fh opened, +1 */
 	size_t p_fh_cap; /* capacity of the file handle array */
 	struct pfh_data* p_fh;
+	// struct pfh_data* dup_table[OPEN_MAX]; /* tracking for the dup2 */
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

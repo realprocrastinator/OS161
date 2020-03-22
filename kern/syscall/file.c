@@ -18,6 +18,8 @@
 #include <addrspace.h>
 #include <stat.h>
 #include <endian.h>
+#include <limits.h>
+#include <file.h>
 
 /*
  * Add your file-related functions here ...
@@ -29,6 +31,16 @@ void* kiobuff;
 #define curas (curproc->p_addrspace)
 
 #define RW_BUFF_SZ 8
+// get the largest fd from the current proc
+#define OFH (curproc->p_maxfh)
+// opened files = maxfh + 1
+#define OFILES (OFH + 1)
+// table size
+#define TCAP (curproc->p_fh_cap)
+// Enlarged table size = MULTIPLE * P_FH_INC
+#define MULTIPLE ((newfd - OFH) / 4)
+// valid fd upperbound in read open and write
+#define UBOUND ((curproc->p_maxfh / 4 + 1) * 4) 
 
 /*helper functions*/
 inline size_t max(size_t a, size_t b);
@@ -38,6 +50,55 @@ inline size_t min(size_t a, size_t b);
 int grow_pfh(void);
 
 /*syscall handler functions*/
+
+int a2_sys_dup2(int oldfd, int newfd, int *outfd){
+    int err = 0; // err code
+    
+    // given fd is not valid we should return EBADF
+    if (oldfd < 0 || newfd < 0 || oldfd > (int)OFH){
+        return EBADF;
+    }
+
+    // if the given fd is beyond the limit, we should return EMFILE
+    if (newfd > OPEN_MAX - 1 || oldfd > OPEN_MAX - 1){
+        return EMFILE;
+    }
+
+
+    if (newfd == oldfd){
+        /* if the fds are same do nothing but return the newfd */
+        *outfd = newfd;
+        return 0;
+    }
+
+    if((uint32_t)newfd > TCAP-1){
+        /* seems our p_fh table is not large enough! Make it bigger */
+        for (uint32_t i = 0; i < MULTIPLE; i++){
+            err = grow_pfh();
+            if (err)
+                /* something wrong with the memory */
+                return err;
+        }
+    }
+
+    /* if the newfd is already opened then we need to close it first */
+    if((uint32_t)newfd <= OFH){
+        err = a2_sys_close(newfd);
+        if (err){
+            // something wrong here because we cant close the file!
+            return err;
+        }
+    }
+
+    /* we need to attach the vnode of the oldfd to our newfd */
+    curproc->p_fh[newfd] = curproc->p_fh[oldfd];
+    /* Dont forget to increase the reference counter! */
+    VOP_INCREF(curproc->p_fh[newfd].vnode);
+    
+    /* at this moment dup2 is successful */
+    *outfd = newfd;
+    return 0;
+}
 
 int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64){
     int result = 0;
@@ -52,7 +113,7 @@ int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whenc
     join32to64(offset_hi, offset_lo, (uint64_t*)&offset);
 
     /* if FD is invalid or vnode is NULL */
-    if((size_t)fd >= curproc->p_fh_cap || !vn) 
+    if((size_t)fd >= UBOUND || !vn) 
         return EBADF;
 
     /* if the vnode is not seekable */
@@ -153,7 +214,7 @@ finish:
 
 int a2_sys_close(int fd) {
     // the same code as from a2_sys_rw below!
-    if((size_t)fd >= curproc->p_fh_cap || !curproc->p_fh[fd].vnode) {
+    if((size_t)fd >= UBOUND || !curproc->p_fh[fd].vnode) {
         return EBADF;
     }
 
@@ -175,7 +236,7 @@ int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* writte
     int result;
     size_t currwritten, to_write;
 
-    if((size_t)filehandle >= curproc->p_fh_cap || !curproc->p_fh[filehandle].vnode) {
+    if((size_t)filehandle >= UBOUND || !curproc->p_fh[filehandle].vnode) {
         return EBADF;
     }
 
