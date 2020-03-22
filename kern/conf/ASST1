@@ -31,5 +31,5 @@ options semfs			# Dependent of sfs
 options dumbvm			# Chewing gum and baling wire for asst 1&2.
 options unsw		    # More chewing gum and baling wire.
 options synchprobs		# The synchronization problems for assignment 1
-options hangman			# Enable the deadlock detector
+# options hangman			# Enable the deadlock detector
 
