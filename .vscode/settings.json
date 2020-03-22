@@ -26,6 +26,9 @@
         "device.h": "c",
         "lib.h": "c",
         "sfs.h": "c",
-        "sfsprivate.h": "c"
-    }
+        "sfsprivate.h": "c",
+        "endian.h": "c",
+        "copyinout.h": "c"
+    },
+    "C_Cpp.errorSquiggles": "Disabled"
 }
