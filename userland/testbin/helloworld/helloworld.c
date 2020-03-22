@@ -13,6 +13,7 @@ void hello(void);
 void print_memories(void);
 void basic_file_test(void);
 void lseek_test(void);
+void dup2_test(void);
 
 void hello() {
 	puts("I am doing nothing!");
@@ -124,6 +125,55 @@ void lseek_test(void) {
 	printf("%s\n", match ? "Match!" : "Mismatch!");
 }
 
+void dup2_test() {
+	int result;
+	int fd1 = open("/testfiles/append.dat", O_RDONLY);
+	if(fd1 < 0) {
+		printf("Error opening file 1: %d\n", errno);
+		return;
+	}
+	
+	int fd2 = open("/testfiles/append.dat", O_RDONLY);
+	if(fd2 < 0) {
+		printf("Error opening file 2: %d\n", errno);
+		return;
+	}
+	
+	printf("Got FD1 = %d and FD2 = %d.\n", fd1, fd2);
+	
+	// try duplicate to an invalid file pointer
+	result = dup2(fd1, 7);
+	if(result < 0) {
+		printf("Failed! dup2 on invalid FD failed with error %d!\n", errno);
+		return;
+	} else {
+		printf("Success!! dup2 on invalid FD succeeded.\n");
+		close(7);
+	}
+	
+	// dup2 fd1 to fd2
+	result = dup2(fd1, fd2);
+	if(result < 0) {
+		printf("dup2 failed with error %d!\n", errno);
+		return;
+	}
+	
+	// close fd2
+	//close(fd2);
+	close(fd1);
+	
+	// can we still read fd1?
+	int buff;
+	result = read(fd2, &buff, sizeof(buff));
+	if(result < 0) {
+		// closing duplicated FD should not close the other and vice versa
+		printf("Failed! Because read failed with error %d\n", result);
+	}
+	else {
+		printf("Success! Because read succeeded.\n");
+	}
+}
+
 int main() {
-	lseek_test();
+	dup2_test();
 }
