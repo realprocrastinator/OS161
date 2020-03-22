@@ -102,9 +102,7 @@ syscall(struct trapframe *tf)
 	 * like write.
 	 */
 
-	retval = 0;
-	off_t offset;
-	int32_t *whence;
+	retval64 = retval = 0;
 
 	switch (callno) {
 	    case SYS_reboot:
@@ -119,9 +117,8 @@ syscall(struct trapframe *tf)
 	    /* Add stuff here */
 		case SYS_lseek:
 			/* get whence from sp+16 */
-			whence = (int32_t *)(tf->tf_sp + 16);
-			join32to64((uint32_t) tf->tf_a2, (uint32_t) tf->tf_a3, (uint64_t *)&offset);
-			err = a2_sys_lseek(tf->tf_a0, offset, whence, &retval64);
+			err = a2_sys_lseek(tf->tf_a0, tf->tf_a2, tf->tf_a3,
+				(userptr_t)(tf->tf_sp + 16), &retval64);
 			flag64 = true;
 			break;
 		case SYS_open:
@@ -152,15 +149,13 @@ syscall(struct trapframe *tf)
 		tf->tf_v0 = err;
 		tf->tf_a3 = 1;      /* signal an error */
 	}
-	else if(flag64){
-		/* we need to handle 64-bits retval */
-		tf->tf_a3 = 0;      /* signal no error */
-		split64to32(retval64,&tf->tf_v1,&tf->tf_v0); 
-	}
 	else {
 		/* Success. */
-		tf->tf_v0 = retval;
 		tf->tf_a3 = 0;      /* signal no error */
+		if(flag64)
+			split64to32(retval64, &tf->tf_v1, &tf->tf_v0);
+		else
+			tf->tf_v0 = retval;
 	}
 
 	/*

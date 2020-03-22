@@ -19,7 +19,7 @@
  * Put your function declarations and data types here ...
  */
 
-off_t a2_sys_lseek(int fd, off_t offset, int32_t *whence, int64_t *retval64);
+int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64);
 int a2_sys_open(userptr_t filename, int flags, int* out_fd);
 int a2_sys_close(int fd);
 int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written);

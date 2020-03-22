@@ -39,43 +39,40 @@ int grow_pfh(void);
 
 /*syscall handler functions*/
 
-off_t a2_sys_lseek(int fd, off_t offset, int32_t* whence, int64_t* retval64){
+int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64){
     int result = 0;
+    /* off_t are 64 bit signed integers */
+    off_t offset; /* old offset */
     off_t new_offset;
     struct stat *file_st = NULL;
     struct vnode * vn = curproc->p_fh[fd].vnode;
+    int32_t whence_val;
+
+    /* join the old offset. even though the arguments requires unsigned integer, it should not matter. */
+    join32to64(offset_hi, offset_lo, (uint64_t*)&offset);
 
     /* if FD is invalid or vnode is NULL */
-    if((size_t)fd >= curproc->p_fh_cap || !vn) {
-        result = EBADF;
-        goto badresult;
-    }
+    if((size_t)fd >= curproc->p_fh_cap || !vn) 
+        return EBADF;
 
     /* if the vnode is not seekable */
-    if(!VOP_ISSEEKABLE(vn)){
+    if(!VOP_ISSEEKABLE(vn))
         /* operation not permitted or ESPIPE?*/
-        result = ESPIPE;
-        goto badresult;
-    }
+        return ESPIPE;
 
-    /* make sure the offset given by user is valid */
-    if(offset < 0){
-        result = EINVAL;
-        goto badresult;
-    }
-
-    /* get the current position of the file data and it's actually the end of the file*/
-    int currpos = curproc->p_fh[fd].curr_offset;
-
-    /* set cursor at the begining of the file */
+    /* get the whence from user's stack */
+    result = copyin(whence, &whence_val, sizeof(int32_t));
+    if(result)
+        // trying to fool me? not this time!
+        return result;
     
-    switch( *whence ) {
+    switch( whence_val ) {
 		case SEEK_SET:
             new_offset = offset;
 			break;
 		
 		case SEEK_CUR:
-			new_offset = currpos + offset;
+			new_offset = curproc->p_fh[fd].curr_offset + offset;
 			break;
 
 		case SEEK_END:
@@ -89,18 +86,19 @@ off_t a2_sys_lseek(int fd, off_t offset, int32_t* whence, int64_t* retval64){
 			new_offset = file_st->st_size + offset;
 			break;
 		default:
-			result = EINVAL;
+			return EINVAL;
 	}
-    
-    /* no match flag! */
-    /* update the phf_data structure */
-    curproc->p_fh[fd].curr_offset = new_offset;
-    *retval64 = new_offset;
-    return result;
 
-badresult:
-    *retval64 = -1;
-    return result;
+    /* make sure the final offset is not negative */
+    if(new_offset < 0)
+        return EINVAL;
+    
+    /* update the phf_data structure */
+    /* from this point on, should be success, so we return 0 :) */
+    curproc->p_fh[fd].curr_offset = new_offset;
+
+    *retval64 = new_offset;
+    return 0;
 }
 
 int a2_sys_open(userptr_t filename, int flags, int* out_fd) {
