@@ -116,7 +116,7 @@ syscall(struct trapframe *tf)
 
 	    /* Add stuff here */
 		case SYS_dup2:
-			err = a2_sys_dup2(tf->tf_a0,tf->tf_a1,&retval);
+			err = a2_sys_dup2(tf->tf_a0, tf->tf_a1 ,&retval);
 			break;
 		case SYS_lseek:
 			/* get whence from sp+16 */
@@ -125,16 +125,16 @@ syscall(struct trapframe *tf)
 			flag64 = true;
 			break;
 		case SYS_open:
-			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval);
+			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval, -1);
 			break;
 		case SYS_close:
 			err = a2_sys_close(tf->tf_a0);
 			break;
 		case SYS_write:
-			err = a2_sys_rw(tf->tf_a0, 1, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
+			err = a2_sys_rw(tf->tf_a0, 1, (userptr_t)tf->tf_a1, tf->tf_a2, &retval);
 			break;
 		case SYS_read:
-			err = a2_sys_rw(tf->tf_a0, 0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
+			err = a2_sys_rw(tf->tf_a0, 0, (userptr_t)tf->tf_a1, tf->tf_a2, &retval);
 			break;
 	    default:
 		kprintf("Unknown syscall %d\n", callno);

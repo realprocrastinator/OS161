@@ -67,6 +67,7 @@ struct vnode;
 
 struct pfh_data {
 	struct vnode* vnode;
+	uint32_t refcount;
 	off_t curr_offset;
 };
 
@@ -83,10 +84,15 @@ struct proc {
 
 	/* add more material here as needed */
 	/* per-process file handle table section */
-	size_t p_maxfh; /* maximum fh opened, +1 */
+	size_t p_maxfh_int; /* maximum fh opened internal, +1 */
+	size_t p_maxfh_ext; /* maximum fh opened external, +1 */
 	size_t p_fh_cap; /* capacity of the file handle array */
-	struct pfh_data* p_fh;
-	// struct pfh_data* dup_table[OPEN_MAX]; /* tracking for the dup2 */
+	/* internal table that stores vnode object, offset, etc. */
+	struct pfh_data* p_fh_int;
+	/* Actual file handle table referred by user mode.
+	   Signed, so that we can store -1.
+	*/
+	int32_t* p_fh_ext;
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

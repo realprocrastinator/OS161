@@ -18,11 +18,11 @@
 /*
  * Put your function declarations and data types here ...
  */
-int a2_sys_dup2(int oldfd,int newfd,int *outfd);
-int a2_sys_lseek(int fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64);
-int a2_sys_open(userptr_t filename, int flags, int* out_fd);
-int a2_sys_close(int fd);
-int a2_sys_rw(int filehandle, int write, void *buf, size_t size, int32_t* written);
+int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd);
+int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t whence, off_t *retval64);
+int a2_sys_open(userptr_t filename, int flags, int32_t* out_fd, int32_t target_fd);
+int a2_sys_close(uint32_t fd);
+int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* written);
 
 
 #endif /* _FILE_H_ */

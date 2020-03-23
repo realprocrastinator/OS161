@@ -101,35 +101,26 @@ runprogram(char *progname)
 		return result;
 	}
 
-	/* In this part, we assume that the process is newly created.
-	   Therefore, we expect the p_fh tables to be empty.
-	 */
-	KASSERT(curproc->p_fh_cap >= 3);
-	const char* console_name = "con:";
-	char fnopen[5];
+	userptr_t console_name = (userptr_t)"con:";
+	int32_t out_fd;
 	// stdin (0)
-	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_RDONLY, 0, &curproc->p_fh[0].vnode);
+	result = a2_sys_open(console_name, O_RDONLY, &out_fd, 0);
 	if(result) {
 		kprintf("Failed to open stdin");
 		return result;
 	}
 	// stdout (1)
-	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[1].vnode);
+	result = a2_sys_open(console_name, O_WRONLY, &out_fd, 1);
 	if(result) {
 		kprintf("Failed to open stdout");
 		return result;
 	}
 	// stderr (2)
-	memcpy(fnopen, console_name, 5);
-	result = vfs_open(fnopen, O_WRONLY, 0, &curproc->p_fh[2].vnode);
+	result = a2_sys_open(console_name, O_WRONLY, &out_fd, 2);
 	if(result) {
 		kprintf("Failed to open stderr");
 		return result;
 	}
-	// update the p_fh metadata
-	curproc->p_maxfh = 3;
 
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
