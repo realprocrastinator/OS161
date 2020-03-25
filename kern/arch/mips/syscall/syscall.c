@@ -125,7 +125,7 @@ syscall(struct trapframe *tf)
 			flag64 = true;
 			break;
 		case SYS_open:
-			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, &retval, -1);
+			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, tf->tf_a2, &retval, -1);
 			break;
 		case SYS_close:
 			err = a2_sys_close(tf->tf_a0);

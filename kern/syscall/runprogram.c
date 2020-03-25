@@ -104,19 +104,19 @@ runprogram(char *progname)
 	userptr_t console_name = (userptr_t)"con:";
 	int32_t out_fd;
 	// stdin (0)
-	result = a2_sys_open(console_name, O_RDONLY, &out_fd, 0);
+	result = a2_sys_open(console_name, O_RDONLY, 0777, &out_fd, 0);
 	if(result) {
 		kprintf("Failed to open stdin");
 		return result;
 	}
 	// stdout (1)
-	result = a2_sys_open(console_name, O_WRONLY, &out_fd, 1);
+	result = a2_sys_open(console_name, O_WRONLY, 0777, &out_fd, 1);
 	if(result) {
 		kprintf("Failed to open stdout");
 		return result;
 	}
 	// stderr (2)
-	result = a2_sys_open(console_name, O_WRONLY, &out_fd, 2);
+	result = a2_sys_open(console_name, O_WRONLY, 0777, &out_fd, 2);
 	if(result) {
 		kprintf("Failed to open stderr");
 		return result;

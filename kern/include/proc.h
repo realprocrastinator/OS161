@@ -67,7 +67,8 @@ struct vnode;
 
 struct pfh_data {
 	struct vnode* vnode;
-	uint32_t refcount;
+	uint16_t refcount;
+	uint16_t flags; /*In this version, only the 1st 2 bits are used for ACCMODE*/
 	off_t curr_offset;
 };
 

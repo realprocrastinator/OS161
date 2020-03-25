@@ -143,10 +143,24 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
     return 0;
 }
 
-int a2_sys_open(userptr_t filename, int flags, int32_t* out_fd, int32_t target_fd) {
+int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int32_t target_fd) {
     int result = 0;
     size_t filename_len;
     size_t fd;
+
+    // check if access mode is valid
+    int accmode = flags & O_ACCMODE;
+    switch (accmode)
+    {
+    case O_RDONLY:
+    case O_WRONLY:
+    case O_RDWR:
+        // OK, continue
+        break;
+    default:
+        // WTH?
+        return EINVAL;
+    }
 
     // hard limit
     if(curproc->p_maxfh_ext >= OPEN_MAX)
@@ -190,7 +204,7 @@ int a2_sys_open(userptr_t filename, int flags, int32_t* out_fd, int32_t target_f
     for(int_fd = 0; int_fd < curproc->p_maxfh_int && curproc->p_fh_int[int_fd].vnode; ++int_fd) {}
     
     // let VFS does it's job!
-    result = vfs_open(kfilename, flags, 0, &curproc->p_fh_int[int_fd].vnode);
+    result = vfs_open(kfilename, flags, (flags & O_CREAT ? mode : 0777), &curproc->p_fh_int[int_fd].vnode);
     if(result) {
         curproc->p_fh_int[int_fd].vnode = 0;
         goto finish;
@@ -199,6 +213,8 @@ int a2_sys_open(userptr_t filename, int flags, int32_t* out_fd, int32_t target_f
     curproc->p_fh_int[int_fd].curr_offset = 0;
     // don't forget the refcount
     ++curproc->p_fh_int[int_fd].refcount;
+    // don't forget to set the ACCMODE flag
+    curproc->p_fh_int[int_fd].flags = accmode;
     
     // update stats
     if(fd >= (curproc->p_maxfh_ext))
@@ -254,6 +270,23 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
         return EBADF;
 
     struct pfh_data* intfh = curproc->p_fh_int + curproc->p_fh_ext[fd];
+
+    // check ACCMODE
+    switch(intfh->flags & O_ACCMODE) {
+        case O_RDONLY:
+            if(write)
+                return EBADF;
+            break;
+        case O_WRONLY:
+            if(!write)
+                return EBADF;
+            break;
+        case O_RDWR:
+            break;
+        default:
+            // joining flags for ACCMODE like this is not valid!
+            return EBADF;
+    }
 
     // init kernel IOV data structure
     uio_kinit(&iov, &ku, kbuff, RW_BUFF_SZ, intfh->curr_offset, write ? UIO_WRITE : UIO_READ);

@@ -13,11 +13,22 @@ const int buff_len = 45;
 int main() {
 	int fd01,fd02,fd03,fd04,result;
 	char lbuff[128];
+
+    // test 0 - check if truncate works
+    puts("Ultra basic test! Check if truncate works (below should result in 0).");
+    fd01 = open(filename, O_CREAT|O_TRUNC|O_RDWR, 0755);
+    if(fd01 < 0)
+		goto error;
+    printf("Got #1 FD %d\n", fd01);
+    result = read(fd01, lbuff, sizeof(lbuff));
+    printf("Got %d bytes\n", result);
+    close(fd01);
+    puts("");
 	
 	// test 1 - basic file write
 	puts("Basic test!");
 	puts("Open file for writing");
-	fd01 = open(filename, O_CREAT|O_TRUNC|O_WRONLY, 0777);
+	fd01 = open(filename, O_CREAT|O_TRUNC|O_WRONLY, 0755);
 	if(fd01 < 0)
 		goto error;
 	printf("Got #1 FD %d\n", fd01);
@@ -132,7 +143,7 @@ int main() {
     
     // 4 - dup2 test (FD02 still open!)
     puts("Opening R/W file truncate for dup2 test");
-    fd03 = open(filename, O_CREAT|O_TRUNC|O_RDWR, 0777);
+    fd03 = open(filename, O_CREAT|O_TRUNC|O_RDWR, 0755);
     if(fd03 < 0)
         goto error;
     printf("Got #3 FD %d. This FD will be dup2-ed 3 times.\n", fd03);
