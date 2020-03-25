@@ -47,9 +47,9 @@ int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {
     if(oldfd >= curproc->p_maxfh_ext || curproc->p_fh_ext[oldfd] < 0) 
         return EBADF;
 
-    // if the given fd is beyond the absolute limit, we should return EMFILE
+    // if the given fd is beyond the absolute limit, we should return EBADF
     if (newfd >= OPEN_MAX)
-        return EMFILE;
+        return EBADF;
 
     if (newfd == oldfd) {
         /* if the fds are same do nothing but return the newfd */
