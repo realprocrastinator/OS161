@@ -21,6 +21,15 @@ int main() {
 	if(fd01 < 0)
 		goto error;
 	printf("Got #1 FD %d\n", fd01);
+
+    // test 1.1 - try reading on WRONLY
+    puts("Try reading ...");
+    result = read(fd01, lbuff, 1);
+    if(result >= 0) {
+        puts("Doesn't expect read to success on WRONLY file.");
+        return 0;
+    }
+    printf("Success! Read failed with error: %d\n", errno);
 	
 	printf("Writing %d bytes\n", buff_len);
 	result = write(fd01, buff, buff_len);
@@ -76,8 +85,17 @@ int main() {
         return 0;
     }
     puts("Read buffer is OK");
+
+    // 2.3 try write
+    puts("Try writing ...");
+    result = write(fd02, buff, buff_len);
+    if(result >= 0) {
+        puts("Doesn't expect write to success on RDONLY file.");
+        return 0;
+    }
+    printf("Success! Write failed with error: %d\n", errno);
     puts("");
-    
+
 #ifdef APPEND_TEST
     // 3 - append test
     puts("Open file for append write");
