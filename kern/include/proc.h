@@ -37,6 +37,7 @@
  */
 
 #include <spinlock.h>
+#include <limits.h>
 
 struct addrspace;
 struct thread;
@@ -59,6 +60,18 @@ struct vnode;
  * thread_switch needs to be able to fetch the current address space
  * without sleeping.
  */
+
+/* Alpaca's defiend constants */
+/* number of increments for p_fh */
+#define P_FH_INC 4
+
+struct pfh_data {
+	struct vnode* vnode;
+	uint16_t refcount;
+	uint16_t flags; /*In this version, only the 1st 2 bits are used for ACCMODE*/
+	off_t curr_offset;
+};
+
 struct proc {
 	char *p_name;			/* Name of this process */
 	struct spinlock p_lock;		/* Lock for this structure */
@@ -71,6 +84,16 @@ struct proc {
 	struct vnode *p_cwd;		/* current working directory */
 
 	/* add more material here as needed */
+	/* per-process file handle table section */
+	size_t p_maxfh_int; /* maximum fh opened internal, +1 */
+	size_t p_maxfh_ext; /* maximum fh opened external, +1 */
+	size_t p_fh_cap; /* capacity of the file handle array */
+	/* internal table that stores vnode object, offset, etc. */
+	struct pfh_data* p_fh_int;
+	/* Actual file handle table referred by user mode.
+	   Signed, so that we can store -1.
+	*/
+	int32_t* p_fh_ext;
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

@@ -44,6 +44,7 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <file.h>
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -94,6 +95,27 @@ runprogram(char *progname)
 	result = as_define_stack(as, &stackptr);
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	userptr_t console_name = (userptr_t)"con:";
+	int32_t out_fd;
+	// stdin (0)
+	result = a2_sys_open(console_name, O_RDONLY, 0777, &out_fd, 0);
+	if(result) {
+		kprintf("Failed to open stdin");
+		return result;
+	}
+	// stdout (1)
+	result = a2_sys_open(console_name, O_WRONLY, 0777, &out_fd, 1);
+	if(result) {
+		kprintf("Failed to open stdout");
+		return result;
+	}
+	// stderr (2)
+	result = a2_sys_open(console_name, O_WRONLY, 0777, &out_fd, 2);
+	if(result) {
+		kprintf("Failed to open stderr");
 		return result;
 	}
 

@@ -35,6 +35,8 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include <file.h>
+#include <endian.h>
 
 
 /*
@@ -80,6 +82,9 @@ syscall(struct trapframe *tf)
 {
 	int callno;
 	int32_t retval;
+	/* only for lseek */
+	int64_t retval64;
+	bool flag64 = false;
 	int err;
 
 	KASSERT(curthread != NULL);
@@ -97,7 +102,7 @@ syscall(struct trapframe *tf)
 	 * like write.
 	 */
 
-	retval = 0;
+	retval64 = retval = 0;
 
 	switch (callno) {
 	    case SYS_reboot:
@@ -110,7 +115,27 @@ syscall(struct trapframe *tf)
 		break;
 
 	    /* Add stuff here */
-
+		case SYS_dup2:
+			err = a2_sys_dup2(tf->tf_a0, tf->tf_a1 ,&retval);
+			break;
+		case SYS_lseek:
+			/* get whence from sp+16 */
+			err = a2_sys_lseek(tf->tf_a0, tf->tf_a2, tf->tf_a3,
+				(userptr_t)(tf->tf_sp + 16), &retval64);
+			flag64 = true;
+			break;
+		case SYS_open:
+			err = a2_sys_open((userptr_t)tf->tf_a0, tf->tf_a1, tf->tf_a2, &retval, -1);
+			break;
+		case SYS_close:
+			err = a2_sys_close(tf->tf_a0);
+			break;
+		case SYS_write:
+			err = a2_sys_rw(tf->tf_a0, 1, (userptr_t)tf->tf_a1, tf->tf_a2, &retval);
+			break;
+		case SYS_read:
+			err = a2_sys_rw(tf->tf_a0, 0, (userptr_t)tf->tf_a1, tf->tf_a2, &retval);
+			break;
 	    default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;
@@ -129,8 +154,11 @@ syscall(struct trapframe *tf)
 	}
 	else {
 		/* Success. */
-		tf->tf_v0 = retval;
 		tf->tf_a3 = 0;      /* signal no error */
+		if(flag64)
+			split64to32(retval64, &tf->tf_v0, &tf->tf_v1);
+		else
+			tf->tf_v0 = retval;
 	}
 
 	/*

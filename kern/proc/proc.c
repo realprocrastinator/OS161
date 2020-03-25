@@ -82,6 +82,15 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
+	/* FH fields */
+	proc->p_fh_cap = P_FH_INC;
+	proc->p_maxfh_int = proc->p_maxfh_ext = 0;
+	proc->p_fh_int = kmalloc(P_FH_INC * sizeof(struct pfh_data));
+	proc->p_fh_ext = kmalloc(P_FH_INC * sizeof(int32_t));
+	// don't forget to zero out the table!
+	memset(proc->p_fh_int, 0 , sizeof(struct pfh_data) * P_FH_INC);
+	memset(proc->p_fh_ext, -1, sizeof(int32_t) * P_FH_INC);
+	
 	return proc;
 }
 
