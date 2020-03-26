@@ -82,14 +82,12 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
-	/* FH fields */
-	proc->p_fh_cap = P_FH_INC;
-	proc->p_maxfh_int = proc->p_maxfh_ext = 0;
-	proc->p_fh_int = kmalloc(P_FH_INC * sizeof(struct pfh_data));
-	proc->p_fh_ext = kmalloc(P_FH_INC * sizeof(int32_t));
-	// don't forget to zero out the table!
-	memset(proc->p_fh_int, 0 , sizeof(struct pfh_data) * P_FH_INC);
-	memset(proc->p_fh_ext, -1, sizeof(int32_t) * P_FH_INC);
+	/* PFH synch variables */
+	proc->pfh_lock = NULL;
+	proc->pfh_lock_refcount = NULL;
+
+	/* Zero out file table */
+	memset(proc->p_fh, 0, sizeof(struct pfh_data*) * OPEN_MAX);
 	
 	return proc;
 }
@@ -124,6 +122,30 @@ proc_destroy(struct proc *proc)
 	if (proc->p_cwd) {
 		VOP_DECREF(proc->p_cwd);
 		proc->p_cwd = NULL;
+	}
+
+	// if we don't have the refcount, it means that either the process
+	// was not designed for usermode, or it failed halfway.
+	// therefore, we also assume that the pfh_lock doesn't exist.
+	if(proc->pfh_lock_refcount) {
+		if(!*proc->pfh_lock_refcount) {
+			// process was halfway created: lock creation failed.
+			kfree(proc->pfh_lock_refcount);
+		} else {
+			// ensure that we don't race with other destructor,
+			// especially regarding the reference counter.
+			lock_acquire(proc->pfh_lock);
+			if(!--*proc->pfh_lock_refcount) {
+				// When the refcount reaches 0, there must be no one else referencing
+				// this lock and refcount. If it does, then we have a SERIOUS bug!
+				// therefore, we'll destroy all of 'em to avoid leak!
+				kfree(proc->pfh_lock_refcount);
+				lock_release(proc->pfh_lock);
+				lock_destroy(proc->pfh_lock);
+			} else {
+				lock_release(proc->pfh_lock);
+			}
+		}
 	}
 
 	/* VM fields */
@@ -213,7 +235,24 @@ proc_create_runprogram(const char *name)
 
 	newproc->p_addrspace = NULL;
 
-	/* VFS fields */
+	/* FH synch fields */
+	newproc->pfh_lock_refcount = kmalloc(sizeof(uint32_t));
+	if(!newproc->pfh_lock_refcount) {
+		// failed creating refcount for process
+		proc_destroy(newproc);
+		return NULL;
+	}
+	// marker for destroyer that the process was created halfway
+	*newproc->pfh_lock_refcount = 0;
+	
+	newproc->pfh_lock = lock_create("proc_pfh");
+	if(!newproc->pfh_lock) {
+		// failed creating lock
+		proc_destroy(newproc);
+		return NULL;
+	}
+	*newproc->pfh_lock_refcount = 1;
+	/* end FH synch fields */
 
 	/*
 	 * Lock the current process to copy its current directory.
