@@ -1,8 +1,11 @@
+#include <types.h>
 #include <a2adv.h>
 #include <addrspace.h>
 #include <thread.h>
 #include <proc.h>
 #include <synch.h>
+#include <current.h>
+#include <kern/errno.h>
 
 struct fork_child_pass {
     struct lock* lock;
@@ -13,7 +16,7 @@ struct fork_child_pass {
 
 void enter_forked_process(void* passdata, unsigned long unused);
 
-int a2_sys_fork(int32_t pid, struct trapframe* tf) {
+int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     int result = 0;
 
     // copy current process address space (this includes stack)
@@ -32,8 +35,7 @@ int a2_sys_fork(int32_t pid, struct trapframe* tf) {
     }
 
     // assign address space to child process
-    proc_setas(child);
-    // TODO: call as_activate after we switched to the child's thread
+    child->p_addrspace = child_as;
 
     // copy filetables
     child->pfh_lock = curproc->pfh_lock;
@@ -46,12 +48,15 @@ int a2_sys_fork(int32_t pid, struct trapframe* tf) {
     // so it should not be possible for it to eventually call proc_destroy.
     lock_acquire(curproc->pfh_lock);
     ++child->pfh_lock_refcount;
+    // TODO: increase ref count for each file
+    // TODO: decrement lock_refcount upon failure!
     lock_release(curproc->pfh_lock);
 
     // create condition variable to synchronize trap frame copy with the forked child
     struct fork_child_pass passdata;
     passdata.status = false;
     passdata.cv = cv_create("sysforkcv");
+    passdata.tf = tf;
     if(!passdata.cv) {
         result = ENOMEM;
         goto error_1;
@@ -76,6 +81,7 @@ int a2_sys_fork(int32_t pid, struct trapframe* tf) {
     lock_release(passdata.lock);
 
     // OK, we can safely remove this stack by returning success!
+    *pid = 42; /* hardcoded PID. Please implement this */
     return 0;
 
 error_2: /* jump here if error after cv and lock creation */
@@ -89,22 +95,26 @@ error_1: /* jump here if error before cv and lock creation */
 }
 
 void enter_forked_process(void* passdata, unsigned long unused) {
+    (void)unused;
+
     struct fork_child_pass* data = passdata;;
     struct trapframe tf;
     memmove(&tf, data->tf, sizeof(struct trapframe));
 
     // signal parent that we've completed
     lock_acquire(data->lock);
+    data->status = true;
     cv_signal(data->cv, data->lock);
     lock_release(data->lock);
 
-    // modify trapframe so that it returns the new pid
-    tf->a3 = 0;
-    tf->v0 = 1; //TODO: replace w/ actual PID!
+    // modify trapframe so that it returns success and PID 0
+    tf.tf_a3 = 0;
+    tf.tf_v0 = 0;
+    tf.tf_epc += 4; // go to next instruction!
 
     // activate process' address space (this will map the MMU)
     as_activate();
 
     // okay, finally, let's go back to mortal's realm!
-    mips_usermode(tf);
+    mips_usermode(&tf);
 }
