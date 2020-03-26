@@ -85,6 +85,7 @@ struct proc {
 	/* add more material here as needed */
 	/* per-process file handle table section */
 	struct lock* pfh_lock; /* process-wide file table lock */
+	uint32_t* pfh_lock_refcount; /* pfh_lock will be destroyed when this reaches 0. This will only increase upon fork. */
 	struct pfh_data* p_fh[OPEN_MAX]; /* Actual file handle table referred by user mode.*/
 };
 

@@ -82,6 +82,10 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
+	/* PFH synch variables */
+	proc->pfh_lock = NULL;
+	proc->pfh_lock_refcount = NULL;
+
 	/* Zero out file table */
 	memset(proc->p_fh, 0, sizeof(struct pfh_data*) * OPEN_MAX);
 	
@@ -121,7 +125,23 @@ proc_destroy(struct proc *proc)
 	}
 
 	/* PFH lock cleanup (only if such lock indeed exists) */
-	if(proc->pfh_lock)
+	bool destroy_lock = false;
+	// check if refcount exists
+	if(proc->pfh_lock_refcount) {
+		// make sure that we don't decrement zero
+		if(*proc->pfh_lock_refcount)
+			--*proc->pfh_lock_refcount;
+		// if the refcount becomes zero, prepare to destroy the lock
+		if(!*proc->pfh_lock_refcount) {
+			// and also free this ref counter
+			kfree(proc->pfh_lock_refcount);
+			destroy_lock = true;
+		}
+	} else
+		// do the check anyway if the lock refcount does not exist
+		destroy_lock = true;
+	// do destroy only if instructed AND the lock actually exists!
+	if(destroy_lock && proc->pfh_lock)
 		lock_destroy(proc->pfh_lock);
 
 	/* VM fields */
@@ -211,14 +231,24 @@ proc_create_runprogram(const char *name)
 
 	newproc->p_addrspace = NULL;
 
-	/* FH fields */
+	/* FH synch fields */
+	newproc->pfh_lock_refcount = kmalloc(sizeof(uint32_t));
+	if(!newproc->pfh_lock_refcount) {
+		// failed creating refcount for process
+		proc_destroy(newproc);
+		return NULL;
+	}
+	// marker for destroyer that the process was created halfway
+	*newproc->pfh_lock_refcount = 0;
+	
 	newproc->pfh_lock = lock_create("proc_pfh");
 	if(!newproc->pfh_lock) {
 		// failed creating lock
 		proc_destroy(newproc);
 		return NULL;
 	}
-	/* end FH fields */
+	*newproc->pfh_lock_refcount = 1;
+	/* end FH synch fields */
 
 	/*
 	 * Lock the current process to copy its current directory.

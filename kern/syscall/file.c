@@ -34,26 +34,40 @@ inline size_t max(size_t a, size_t b);
 
 inline size_t min(size_t a, size_t b);
 
+void a2_sys_close_stub(struct pfh_data* pfh);
+
 /*syscall handler functions*/
 
 int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {
-    // if given fd is not valid we should return EBADF (same code as rw)
     struct pfh_data* pfh;
-    if((oldfd >= OPEN_MAX) || !(pfh = curproc->p_fh[oldfd]))
-        return EBADF;
 
     // if the given fd is beyond the absolute limit, we should return EBADF
     if (newfd >= OPEN_MAX)
         return EBADF;
+    
+    // lock to prevent accessing FD that is about to be closed
+    // also to prevent someone else messing with the target FD
+    lock_acquire(curproc->pfh_lock);
+    if((oldfd >= OPEN_MAX) || !(pfh = curproc->p_fh[oldfd])) {
+        // if given fd is not valid we should return EBADF (same code as rw)
+        lock_release(curproc->pfh_lock);
+        return EBADF;
+    }
+
+    // prevent doing any operation with this file
+    // (we're going to increase the refcount)
+    lock_acquire(pfh->lock);
 
     if (newfd == oldfd) {
         /* if the fds are same do nothing but return the newfd */
         *outfd = newfd;
-        return 0;
+        goto finish;
     }
 
     // just close the newfd!
-    a2_sys_close(newfd);
+    // deadlock? should not happen. this will access process-wide lock and internal lock
+    // but different from this one (newfd's, while we're owning oldfd's)
+    a2_sys_close_stub(curproc->p_fh[newfd]);
     
     // attach the newfd to oldfd
     curproc->p_fh[newfd] = pfh;
@@ -63,6 +77,10 @@ int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {
     
     /* at this moment dup2 is successful */
     *outfd = newfd;
+
+finish:
+    lock_release(curproc->pfh_lock);
+    lock_release(pfh->lock);
     return 0;
 }
 
@@ -74,24 +92,33 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
     struct stat file_st;
     int32_t whence_val;
 
-    // first thing first, check if fd is valid (same code as rw!)
-    struct pfh_data* pfh;
-    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
-        return EBADF;
-
     /* join the old offset. even though the arguments requires unsigned integer, it should not matter. */
     join32to64(offset_hi, offset_lo, (uint64_t*)&offset);
 
+    // first thing first, check if fd is valid (same code as rw!)
+    struct pfh_data* pfh;
+    // lock to prevent accessing FD that is about to be closed
+    lock_acquire(curproc->pfh_lock);
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd])) {
+        lock_release(curproc->pfh_lock);
+        return EBADF;
+    }
+
+    // see a2_sys_rw for the reason why we're doing this pattern
+    lock_acquire(pfh->lock);
+    lock_release(curproc->pfh_lock);
+
     /* if the vnode is not seekable */
-    if(!VOP_ISSEEKABLE(pfh->vnode))
-        /* operation not permitted or ESPIPE?*/
-        return ESPIPE;
+    if(!VOP_ISSEEKABLE(pfh->vnode)) {
+        result = ESPIPE;
+        goto finish;
+    }
 
     /* get the whence from user's stack */
     result = copyin(whence, &whence_val, sizeof(int32_t));
     if(result)
         // trying to fool me? not this time!
-        return result;
+        goto finish;
     
     switch( whence_val ) {
 		case SEEK_SET:
@@ -109,25 +136,30 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
             //is invalid.
 			result = VOP_STAT( pfh->vnode, &file_st );
             if (result)
-                return result;
+                goto finish;
             
 			//set the offet to the filesize.
 			new_offset = file_st.st_size + offset;
 			break;
 		default:
-			return EINVAL;
+            result = EINVAL;
+            goto finish;
 	}
 
     /* make sure the final offset is not negative */
-    if(new_offset < 0)
-        return EINVAL;
+    if(new_offset < 0) {
+        result = EINVAL;
+        goto finish;
+    }
     
     /* update the phf_data structure */
     /* from this point on, should be success, so we return 0 :) */
     pfh->curr_offset = new_offset;
-
     *retval64 = new_offset;
-    return 0;
+
+finish:
+    lock_release(pfh->lock);
+    return result;
 }
 
 int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int32_t target_fd) {
@@ -155,6 +187,9 @@ int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int
     // no idea why does this happen, but end up gracefully!
     if(!kfilename)
         return ENOMEM;
+
+    // this lock is used to prevent multiple user thread (if exists!) from opening the same FD
+    lock_acquire(curproc->pfh_lock);
     
     if(target_fd < 0) {
         // must be from user mode
@@ -205,6 +240,7 @@ int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int
 
     // final cleanup, and set fd pointer
     curproc->p_fh[fd] = pfh;
+    lock_release(curproc->pfh_lock);
     kfree(kfilename);
     return result;
 
@@ -212,31 +248,30 @@ error_3: /* jump here if error after kmalloc-ing pfh and creating lock */
     lock_destroy(pfh->lock);
 error_2: /* jump here if error after kmalloc-ing pfh only */
     kfree(pfh);
-error_1: /* jump here if error after kmalloc-ing filename */
+error_1: /* jump here if error after kmalloc-ing filename AND after acquiring pfh_lock */
+    lock_release(curproc->pfh_lock);
     kfree(kfilename);
     return result;
 }
 
 int a2_sys_close(uint32_t fd) {
     struct pfh_data* pfh;
-    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
-        return EBADF;
-    
-    // reduce refcount, close only if it reaches zero
-    if(!(--pfh->refcount)) {
-        // VFS' job again! This time, no error indicator, so we will assume this
-        // operation is always success! besides, it is specified in POSIX anyway.
-        vfs_close(pfh->vnode);
-    
-        // destroy lock
-        lock_destroy(pfh->lock);
 
-        // deallocate
-        kfree(pfh);
+    // prevent multiple user thread from closing this FD
+    lock_acquire(curproc->pfh_lock);
+
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd])) {
+        lock_release(curproc->pfh_lock);
+        return EBADF;
     }
 
     // this fh is now invalid for application's perspective
     curproc->p_fh[fd] = 0;
+
+    // OK, now other thread is free to access the table!
+    lock_release(curproc->pfh_lock);
+
+    a2_sys_close_stub(pfh);
 
     return 0;
 }
@@ -246,32 +281,49 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
     struct iovec iov, uiov;
 	struct uio ku, uu;
     char kbuff[RW_BUFF_SZ];
-    int result;
+    int result = 0;
     size_t currwritten, to_write;
-    
-    struct pfh_data* pfh;
-    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
-        return EBADF;
 
     // hard limit! (because output is signed 32 bit integer)
     if(size >= 0x80000000)
         return ERANGE;
+    
+    struct pfh_data* pfh;
+    // lock to prevent accessing FD that is about to be closed
+    lock_acquire(curproc->pfh_lock);
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd])) {
+        lock_release(curproc->pfh_lock);
+        return EBADF;
+    }
+    // acq the internal file lock first, to prevent race w/ close syscall
+    // at this point, close is still waiting for pfh_lock. If it already
+    // proceeded to closing the file, we'll get invalid file handle already.
+    lock_acquire(pfh->lock);
+    // done w/ the process-wide lock. Now if close can proceed, and if it
+    // wants to close this file, then it has to wait for the lock that
+    // we've acquired above!
+    lock_release(curproc->pfh_lock);
 
     // check ACCMODE
     switch(pfh->flags & O_ACCMODE) {
         case O_RDONLY:
-            if(write)
-                return EBADF;
+            if(write) {
+                result = EBADF;
+                goto finish;
+            }
             break;
         case O_WRONLY:
-            if(!write)
-                return EBADF;
+            if(!write) {
+                result = EBADF;
+                goto finish;
+            }
             break;
         case O_RDWR:
             break;
         default:
             // joining flags for ACCMODE like this is not valid!
-            return EBADF;
+            result = EBADF;
+            goto finish;
     }
 
     // init kernel IOV data structure
@@ -302,23 +354,21 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
             // copy the data from user ptr to kernel ptr, then write to VOP
             result = uiomove(kbuff, to_write, &uu);
             if(result)
-                return result;
+                goto finish;
             result = VOP_WRITE(pfh->vnode, &ku);
-            if (result){
-                return result;
-            }
+            if (result)
+                goto finish;
             currwritten = to_write - ku.uio_resid;
         } else {
             // read from VOP first, then copy the data to user ptr
             result = VOP_READ(pfh->vnode, &ku);
             if(result)
-                return result;
+                goto finish;
             currwritten = to_write - ku.uio_resid;
             result = uiomove(kbuff, currwritten, &uu);
         }
-        if(result) {
-            return result;
-        }
+        if(result)
+            goto finish;
 
         // successfully written this segment
         // how many write minus how many remaining
@@ -330,7 +380,32 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
             break;
     }
     
+finish:
+    lock_release(pfh->lock);
     return result;
+}
+
+void a2_sys_close_stub(struct pfh_data* pfh) {
+    if(!pfh)
+        return;
+    // we'll wait until other operation on this handle releases the lock
+    lock_acquire(pfh->lock);
+    // reduce refcount, close only if it reaches zero
+    if(!(--pfh->refcount)) {
+        // VFS' job again! This time, no error indicator, so we will assume this
+        // operation is always success! besides, it is specified in POSIX anyway.
+        vfs_close(pfh->vnode);
+    
+        // release and destroy lock
+        lock_release(pfh->lock);
+        lock_destroy(pfh->lock);
+
+        // deallocate
+        kfree(pfh);
+    } else {
+        // don't release the lock twice! (hence we need this "else" part)
+        lock_release(pfh->lock);
+    }
 }
 
 /*helper functions declarations*/
