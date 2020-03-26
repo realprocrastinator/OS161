@@ -142,8 +142,9 @@ proc_destroy(struct proc *proc)
 				kfree(proc->pfh_lock_refcount);
 				lock_release(proc->pfh_lock);
 				lock_destroy(proc->pfh_lock);
+			} else {
+				lock_release(proc->pfh_lock);
 			}
-			lock_release(proc->pfh_lock);
 		}
 	}
 
