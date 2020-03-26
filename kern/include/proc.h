@@ -38,6 +38,7 @@
 
 #include <spinlock.h>
 #include <limits.h>
+#include <synch.h>
 
 struct addrspace;
 struct thread;
@@ -61,14 +62,12 @@ struct vnode;
  * without sleeping.
  */
 
-/* Alpaca's defiend constants */
-/* number of increments for p_fh */
-#define P_FH_INC 4
-
+/* internal structure of FD */
 struct pfh_data {
 	struct vnode* vnode;
 	uint16_t refcount;
 	uint16_t flags; /*In this version, only the 1st 2 bits are used for ACCMODE*/
+	struct lock* lock;
 	off_t curr_offset;
 };
 
@@ -85,15 +84,8 @@ struct proc {
 
 	/* add more material here as needed */
 	/* per-process file handle table section */
-	size_t p_maxfh_int; /* maximum fh opened internal, +1 */
-	size_t p_maxfh_ext; /* maximum fh opened external, +1 */
-	size_t p_fh_cap; /* capacity of the file handle array */
-	/* internal table that stores vnode object, offset, etc. */
-	struct pfh_data* p_fh_int;
-	/* Actual file handle table referred by user mode.
-	   Signed, so that we can store -1.
-	*/
-	int32_t* p_fh_ext;
+	struct lock* pfh_lock; /* process-wide file table lock */
+	struct pfh_data* p_fh[OPEN_MAX]; /* Actual file handle table referred by user mode.*/
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

@@ -82,14 +82,8 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
-	/* FH fields */
-	proc->p_fh_cap = P_FH_INC;
-	proc->p_maxfh_int = proc->p_maxfh_ext = 0;
-	proc->p_fh_int = kmalloc(P_FH_INC * sizeof(struct pfh_data));
-	proc->p_fh_ext = kmalloc(P_FH_INC * sizeof(int32_t));
-	// don't forget to zero out the table!
-	memset(proc->p_fh_int, 0 , sizeof(struct pfh_data) * P_FH_INC);
-	memset(proc->p_fh_ext, -1, sizeof(int32_t) * P_FH_INC);
+	/* Zero out file table */
+	memset(proc->p_fh, 0, sizeof(struct pfh_data*) * OPEN_MAX);
 	
 	return proc;
 }
@@ -125,6 +119,10 @@ proc_destroy(struct proc *proc)
 		VOP_DECREF(proc->p_cwd);
 		proc->p_cwd = NULL;
 	}
+
+	/* PFH lock cleanup (only if such lock indeed exists) */
+	if(proc->pfh_lock)
+		lock_destroy(proc->pfh_lock);
 
 	/* VM fields */
 	if (proc->p_addrspace) {
@@ -213,7 +211,14 @@ proc_create_runprogram(const char *name)
 
 	newproc->p_addrspace = NULL;
 
-	/* VFS fields */
+	/* FH fields */
+	newproc->pfh_lock = lock_create("proc_pfh");
+	if(!newproc->pfh_lock) {
+		// failed creating lock
+		proc_destroy(newproc);
+		return NULL;
+	}
+	/* end FH fields */
 
 	/*
 	 * Lock the current process to copy its current directory.

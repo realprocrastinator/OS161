@@ -27,24 +27,19 @@
 
 #define curas (curproc->p_addrspace)
 
-#define RW_BUFF_SZ 8
-// table size (maximum capacity)
-#define TCAP (curproc->p_fh_cap)
+#define RW_BUFF_SZ 32
 
 /*helper functions*/
 inline size_t max(size_t a, size_t b);
 
 inline size_t min(size_t a, size_t b);
 
-void* a2_realloc(void* oldptr, size_t oldsize, size_t newsize);
-
-int grow_pfh(uint32_t target);
-
 /*syscall handler functions*/
 
 int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {
     // if given fd is not valid we should return EBADF (same code as rw)
-    if(oldfd >= curproc->p_maxfh_ext || curproc->p_fh_ext[oldfd] < 0) 
+    struct pfh_data* pfh;
+    if((oldfd >= OPEN_MAX) || !(pfh = curproc->p_fh[oldfd]))
         return EBADF;
 
     // if the given fd is beyond the absolute limit, we should return EBADF
@@ -57,23 +52,14 @@ int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {
         return 0;
     }
 
-    if((uint32_t)newfd >= TCAP)
-        /* seems our p_fh table is not large enough! Make it bigger */
-        grow_pfh(newfd);
-
     // just close the newfd!
     a2_sys_close(newfd);
     
     // attach the newfd to oldfd
-    curproc->p_fh_ext[newfd] = curproc->p_fh_ext[oldfd];
+    curproc->p_fh[newfd] = pfh;
     
-    /* we need to attach the vnode of the oldfd to our newfd */
-    curproc->p_fh_ext[newfd] = curproc->p_fh_ext[oldfd];
     /* Dont forget to increase the reference counter! */
-    ++curproc->p_fh_int[curproc->p_fh_ext[oldfd]].refcount;
-    /* Also don't forget to update stats! */
-    if(newfd >= curproc->p_maxfh_ext)
-        curproc->p_maxfh_ext = newfd + 1;
+    ++pfh->refcount;
     
     /* at this moment dup2 is successful */
     *outfd = newfd;
@@ -89,16 +75,15 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
     int32_t whence_val;
 
     // first thing first, check if fd is valid (same code as rw!)
-    if(fd >= curproc->p_maxfh_ext || curproc->p_fh_ext[fd] < 0)
+    struct pfh_data* pfh;
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
         return EBADF;
-    
-    struct pfh_data* intfh = curproc->p_fh_int + curproc->p_fh_ext[fd];
 
     /* join the old offset. even though the arguments requires unsigned integer, it should not matter. */
     join32to64(offset_hi, offset_lo, (uint64_t*)&offset);
 
     /* if the vnode is not seekable */
-    if(!VOP_ISSEEKABLE(intfh->vnode))
+    if(!VOP_ISSEEKABLE(pfh->vnode))
         /* operation not permitted or ESPIPE?*/
         return ESPIPE;
 
@@ -114,13 +99,15 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
 			break;
 		
 		case SEEK_CUR:
-			new_offset = intfh->curr_offset + offset;
+			new_offset = pfh->curr_offset + offset;
 			break;
 
 		case SEEK_END:
 			//if it is SEEK_END, we use VOP_STAT to figure out
 			//the size of the file, and set the offset to be that size.
-			result = VOP_STAT( intfh->vnode, &file_st );
+            //if we can't determine the end (via STAT), of course then this operation
+            //is invalid.
+			result = VOP_STAT( pfh->vnode, &file_st );
             if (result)
                 return result;
             
@@ -137,7 +124,7 @@ int a2_sys_lseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo, userptr_t 
     
     /* update the phf_data structure */
     /* from this point on, should be success, so we return 0 :) */
-    intfh->curr_offset = new_offset;
+    pfh->curr_offset = new_offset;
 
     *retval64 = new_offset;
     return 0;
@@ -162,10 +149,6 @@ int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int
         return EINVAL;
     }
 
-    // hard limit
-    if(curproc->p_maxfh_ext >= OPEN_MAX)
-        return EMFILE;
-    
     // ensure that the buffer passed is correct!
     // we'll store this in heap to avoid overfilling the stack :(
     char* kfilename = kmalloc(PATH_MAX);
@@ -177,79 +160,83 @@ int a2_sys_open(userptr_t filename, int flags, mode_t mode, int32_t* out_fd, int
         // must be from user mode
         result = copyinstr(filename, kfilename, PATH_MAX, &filename_len);
         if(result)
-            goto finish;
+            goto error_1;
         // look for empty FD available
-        for(fd = 0; fd < curproc->p_maxfh_ext && curproc->p_fh_ext[fd] >= 0; ++fd) {}
+        for(fd = 0; fd < OPEN_MAX && curproc->p_fh[fd]; ++fd) {}
     } else {
         // if the target_fd is set, then it must be coming from another kernel function
         // we will trust that!
         strcpy(kfilename, (char*)filename);
-        // ensure that the target_fd is available for use
-        if(curproc->p_fh_ext[target_fd] >= 0) {
-            result = EBADF;
-            goto finish;
-        }
         fd = target_fd;
     }
 
-    // reallocate if needed!
-    if(fd >= curproc->p_fh_cap) {
-        result = grow_pfh(fd);
-        if(result)
-            goto finish;
+    // ensure target FD is available for use
+    if(curproc->p_fh[fd]) {
+        result = fd == (OPEN_MAX - 1) ? EMFILE : EBADF;
+        goto error_1;
     }
 
-    // find empty slot for internal fd
-    size_t int_fd;
-    for(int_fd = 0; int_fd < curproc->p_maxfh_int && curproc->p_fh_int[int_fd].vnode; ++int_fd) {}
-    
-    // let VFS does it's job!
-    result = vfs_open(kfilename, flags, (flags & O_CREAT ? mode : 0777), &curproc->p_fh_int[int_fd].vnode);
-    if(result) {
-        curproc->p_fh_int[int_fd].vnode = 0;
-        goto finish;
+    // allocate internal data structure at specified fd
+    struct pfh_data* pfh = kmalloc(sizeof(struct pfh_data));
+    if(!pfh) {
+        result = ENOMEM;
+        goto error_1;
     }
-    // start from the beginning!
-    curproc->p_fh_int[int_fd].curr_offset = 0;
-    // don't forget the refcount
-    ++curproc->p_fh_int[int_fd].refcount;
-    // don't forget to set the ACCMODE flag
-    curproc->p_fh_int[int_fd].flags = accmode;
+    memset(pfh, 0, sizeof(struct pfh_data));
+
+    // lock create
+    pfh->lock = lock_create("pfh_int");
+    if(!pfh->lock) {
+        result = ENOMEM;
+        goto error_2;
+    }
+
+    // let VFS does it's job!
+    result = vfs_open(kfilename, flags, (flags & O_CREAT ? mode : 0777), &pfh->vnode);
+    if(result)
+        goto error_3;
     
-    // update stats
-    if(fd >= (curproc->p_maxfh_ext))
-        curproc->p_maxfh_ext = fd + 1;
-    if(int_fd >= (curproc->p_maxfh_int))
-        curproc->p_maxfh_int = int_fd + 1;
-    curproc->p_fh_ext[fd] = int_fd;
+    // don't forget the refcount
+    ++pfh->refcount;
+    // don't forget to set the ACCMODE flag
+    pfh->flags = accmode;
 
     *out_fd = fd;
 
-finish:
-    // don't forget not to leak memory!
+    // final cleanup, and set fd pointer
+    curproc->p_fh[fd] = pfh;
+    kfree(kfilename);
+    return result;
+
+error_3: /* jump here if error after kmalloc-ing pfh and creating lock */
+    lock_destroy(pfh->lock);
+error_2: /* jump here if error after kmalloc-ing pfh only */
+    kfree(pfh);
+error_1: /* jump here if error after kmalloc-ing filename */
     kfree(kfilename);
     return result;
 }
 
 int a2_sys_close(uint32_t fd) {
-    // the same code as from a2_sys_rw below!
-    if(fd >= curproc->p_maxfh_ext || curproc->p_fh_ext[fd] < 0) 
+    struct pfh_data* pfh;
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
         return EBADF;
-
-    uint32_t int_fd = curproc->p_fh_ext[fd];
     
     // reduce refcount, close only if it reaches zero
-    if(!(--curproc->p_fh_int[int_fd].refcount)) {
+    if(!(--pfh->refcount)) {
         // VFS' job again! This time, no error indicator, so we will assume this
         // operation is always success! besides, it is specified in POSIX anyway.
-        vfs_close(curproc->p_fh_int[int_fd].vnode);
+        vfs_close(pfh->vnode);
     
-        // reset our data struct
-        memset(curproc->p_fh_int + int_fd, 0, sizeof(struct pfh_data));
+        // destroy lock
+        lock_destroy(pfh->lock);
+
+        // deallocate
+        kfree(pfh);
     }
 
     // this fh is now invalid for application's perspective
-    curproc->p_fh_ext[fd] = -1;
+    curproc->p_fh[fd] = 0;
 
     return 0;
 }
@@ -262,17 +249,16 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
     int result;
     size_t currwritten, to_write;
     
+    struct pfh_data* pfh;
+    if((fd >= OPEN_MAX) || !(pfh = curproc->p_fh[fd]))
+        return EBADF;
+
     // hard limit! (because output is signed 32 bit integer)
     if(size >= 0x80000000)
         return ERANGE;
 
-    if(fd >= curproc->p_maxfh_ext || curproc->p_fh_ext[fd] < 0) 
-        return EBADF;
-
-    struct pfh_data* intfh = curproc->p_fh_int + curproc->p_fh_ext[fd];
-
     // check ACCMODE
-    switch(intfh->flags & O_ACCMODE) {
+    switch(pfh->flags & O_ACCMODE) {
         case O_RDONLY:
             if(write)
                 return EBADF;
@@ -289,7 +275,7 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
     }
 
     // init kernel IOV data structure
-    uio_kinit(&iov, &ku, kbuff, RW_BUFF_SZ, intfh->curr_offset, write ? UIO_WRITE : UIO_READ);
+    uio_kinit(&iov, &ku, kbuff, RW_BUFF_SZ, pfh->curr_offset, write ? UIO_WRITE : UIO_READ);
 
     // init passed-in user buffer IOV
     // the last param, the READ/WRITE, is based on user's perspective
@@ -317,14 +303,14 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
             result = uiomove(kbuff, to_write, &uu);
             if(result)
                 return result;
-            result = VOP_WRITE(intfh->vnode, &ku);
+            result = VOP_WRITE(pfh->vnode, &ku);
             if (result){
                 return result;
             }
             currwritten = to_write - ku.uio_resid;
         } else {
             // read from VOP first, then copy the data to user ptr
-            result = VOP_READ(intfh->vnode, &ku);
+            result = VOP_READ(pfh->vnode, &ku);
             if(result)
                 return result;
             currwritten = to_write - ku.uio_resid;
@@ -337,7 +323,7 @@ int a2_sys_rw(uint32_t fd, uint32_t write, void *buf, size_t size, int32_t* writ
         // successfully written this segment
         // how many write minus how many remaining
         *written += currwritten;
-        intfh->curr_offset += currwritten;
+        pfh->curr_offset += currwritten;
 
         // stop if written partially (could be EOF, buffer full, etc.)
         if(currwritten < to_write)
@@ -354,58 +340,4 @@ size_t max(size_t a, size_t b) {
 
 size_t min(size_t a, size_t b) {
     return a < b ? a : b;
-}
-
-int grow_pfh(uint32_t target) {
-    size_t new_fh_cap = TCAP;
-    int result = 0;
-    
-    // do nothing as we can still fit the target
-    if(target < TCAP)
-        return 0;
-    
-    new_fh_cap += (((target-TCAP) / P_FH_INC) + 1) * P_FH_INC;
-
-    // realloc internal
-    struct pfh_data* p_fh_int_new = a2_realloc(curproc->p_fh_int, 
-        TCAP * sizeof(struct pfh_data), new_fh_cap * sizeof(struct pfh_data));
-    // why??? OK, bail out gracefully!
-    if(!p_fh_int_new)
-        return EMFILE;
-    // zero out remaining
-    memset(p_fh_int_new + TCAP, 0, (new_fh_cap - TCAP) * sizeof(struct pfh_data));
-
-    // realloc external
-    int32_t* p_fh_ext_new = a2_realloc(curproc->p_fh_ext,
-        TCAP * sizeof(int32_t), new_fh_cap * sizeof(int32_t));
-    // why??? OK, bail out gracefully!
-    if(!p_fh_ext_new) {
-        result = EMFILE;
-        goto bail_after_int;
-    }
-    // minus one out remaining
-    memset(p_fh_ext_new + TCAP, -1, (new_fh_cap - TCAP) * sizeof(int32_t));
-
-    // update process data struct
-    curproc->p_fh_int = p_fh_int_new;
-    curproc->p_fh_ext = p_fh_ext_new;
-    curproc->p_fh_cap = new_fh_cap;
-
-    return result;
-
-bail_after_int:
-    kfree(p_fh_int_new);
-    return result;
-}
-
-void* a2_realloc(void* oldptr, size_t oldsize, size_t newsize) {
-    if(newsize <= oldsize)
-        // do nothing!
-        return oldptr;
-    
-    void* newbuff = kmalloc(newsize);
-    memcpy(newbuff, oldptr, oldsize);
-    kfree(oldptr);
-
-    return newbuff;
 }
