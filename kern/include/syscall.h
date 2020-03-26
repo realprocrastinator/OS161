@@ -40,13 +40,6 @@ struct trapframe; /* from <machine/trapframe.h> */
 
 void syscall(struct trapframe *tf);
 
-/*
- * Support functions.
- */
-
-/* Helper for fork(). You write this. */
-void enter_forked_process(struct trapframe *tf);
-
 /* Enter user mode. Does not return. */
 __DEAD void enter_new_process(int argc, userptr_t argv, userptr_t env,
 		       vaddr_t stackptr, vaddr_t entrypoint);
