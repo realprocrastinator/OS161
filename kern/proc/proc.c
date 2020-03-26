@@ -124,25 +124,28 @@ proc_destroy(struct proc *proc)
 		proc->p_cwd = NULL;
 	}
 
-	/* PFH lock cleanup (only if such lock indeed exists) */
-	bool destroy_lock = false;
-	// check if refcount exists
+	// if we don't have the refcount, it means that either the process
+	// was not designed for usermode, or it failed halfway.
+	// therefore, we also assume that the pfh_lock doesn't exist.
 	if(proc->pfh_lock_refcount) {
-		// make sure that we don't decrement zero
-		if(*proc->pfh_lock_refcount)
-			--*proc->pfh_lock_refcount;
-		// if the refcount becomes zero, prepare to destroy the lock
 		if(!*proc->pfh_lock_refcount) {
-			// and also free this ref counter
+			// process was halfway created: lock creation failed.
 			kfree(proc->pfh_lock_refcount);
-			destroy_lock = true;
+		} else {
+			// ensure that we don't race with other destructor,
+			// especially regarding the reference counter.
+			lock_acquire(proc->pfh_lock);
+			if(!--*proc->pfh_lock_refcount) {
+				// When the refcount reaches 0, there must be no one else referencing
+				// this lock and refcount. If it does, then we have a SERIOUS bug!
+				// therefore, we'll destroy all of 'em to avoid leak!
+				kfree(proc->pfh_lock_refcount);
+				lock_release(proc->pfh_lock);
+				lock_destroy(proc->pfh_lock);
+			}
+			lock_release(proc->pfh_lock);
 		}
-	} else
-		// do the check anyway if the lock refcount does not exist
-		destroy_lock = true;
-	// do destroy only if instructed AND the lock actually exists!
-	if(destroy_lock && proc->pfh_lock)
-		lock_destroy(proc->pfh_lock);
+	}
 
 	/* VM fields */
 	if (proc->p_addrspace) {
