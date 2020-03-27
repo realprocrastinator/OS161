@@ -7,6 +7,11 @@
 #include <current.h>
 #include <kern/errno.h>
 #include <kern/wait.h>
+#include <kern/fcntl.h>
+#include <vfs.h>
+#include <vnode.h>
+#include <copyinout.h>
+#include <syscall.h>
 
 struct fork_child_pass {
     struct lock* lock;
@@ -185,4 +190,112 @@ int a2_sys_exit(int32_t status) {
     // process destruction will be taken care off whoever is waiting for this process,
 	// after we exit this thread
     thread_exit();
+}
+
+int a2_sys_execv(userptr_t progname, userptr_t* args) {
+    int result;
+    size_t copylen;
+    vaddr_t newentrypoint, newstackptr;
+
+    char* kprogname = kmalloc(PATH_MAX);
+    if(!kprogname)
+        return ENOMEM;
+
+    // we don't trust any pointer given by user!
+    result = copyinstr(progname, kprogname, PATH_MAX, &copylen);
+    if(result)
+        return result;
+
+    // open the target program file
+    struct vnode *v;
+    result = vfs_open(kprogname, O_RDONLY, 0, &v);
+    if(result)
+        goto error_1;
+
+    // temporarily create kernel memory to store the arguments
+    char* kargdata = kmalloc(ARG_MAX);
+    if(!kargdata) {
+        result = ENOMEM;
+        goto error_2;
+    }
+    // count the max size and argcount
+    int argcount = 0;
+    int argsizetotal = 0; /*will include all terminating NULLs*/
+    userptr_t argstri = (userptr_t)0x1;
+    for(; argcount < ARG_MAX/4; ++argcount) {
+        result = copyin((userptr_t)(args+argcount), &argstri, sizeof(userptr_t));
+        if(result)
+            goto error_3;
+        if(!argstri)
+            break;
+        result = copyinstr(argstri, kargdata + argsizetotal, ARG_MAX - argsizetotal, &copylen);
+        if(result)
+            goto error_3;
+        // copylen includes terminating NULL already
+        argsizetotal += copylen;
+    }
+
+    // rescan the offsets
+    size_t* argoffsets = kmalloc(argcount * sizeof(size_t));
+    if(!argoffsets) {
+        result = ENOMEM;
+        goto error_3;
+    }
+    for(int i=0, j=0; i<argsizetotal; ++i) {
+        if(!kargdata[i])
+            argoffsets[j++] = i;
+    }
+    
+    // create new address space
+    struct addrspace* newas = as_create();
+    if(!newas) {
+        result = ENOMEM;
+        goto error_4;
+    }
+
+    // switch and activate the new address space
+    // don't forget to save the old one in case we fail at any point below
+    struct addrspace* oldas = proc_setas(newas);
+    as_activate();
+
+    // load the new executable. this will also populate the AS.
+    result = load_elf(v, &newentrypoint);
+    if(result)
+        goto error_5;
+    // we're done with the VFS that handles to the ELF
+    vfs_close(v);
+    v = NULL; /* to make the code simpler! */
+
+    // user's stack pointer
+    result = as_define_stack(newas, &newstackptr);
+    if(result)
+        goto error_5;
+
+    // TODO: copy the arguments to user's stack
+    
+    // cleanup (do steps in error_4, error_3, and error_1)
+    kfree(argoffsets);
+    kfree(kargdata);
+    kfree(kprogname);
+
+    // go back to the mortal's realm!
+    enter_new_process(0, NULL, NULL, newstackptr, newentrypoint);
+
+    panic("A supposedly successful execv returned!");
+    result = EINVAL;
+
+error_5: /*jump here if error after creating and switching addr space*/
+    proc_setas(oldas);
+    as_activate();
+    as_destroy(newas);
+error_4: /*jump here if error after allocating argument offset holder*/
+    kfree(argoffsets);
+error_3: /*jump here if error after allocating argument holder*/
+    kfree(kargdata);
+error_2: /*jump here if error after opening target executable*/
+    if(v)
+        vfs_close(v);
+error_1: /* jump here if error after allocating kprogname */
+    kfree(kprogname);
+    return result;
 }
