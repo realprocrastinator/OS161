@@ -39,6 +39,7 @@
 #include <vm.h>
 #include <mainbus.h>
 #include <syscall.h>
+#include <proc.h>
 
 
 /* in exception-*.S */
@@ -112,9 +113,20 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 	 * You will probably want to change this.
 	 */
 
-	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
+	(void)epc;
+	(void)vaddr;
+	(void)sig;
+	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n"
+		"Target process will be killed.\n",
 		code, sig, trapcodenames[code], epc, vaddr);
-	panic("I don't know how to handle this\n");
+
+	// set the return value to the signal number
+	curproc->retval = sig;
+
+	// process destruction will be taken care off whoever is waiting for this process,
+	// after we exit this thread
+	thread_exit();
+	//panic("I don't know how to handle this\n");
 }
 
 /*

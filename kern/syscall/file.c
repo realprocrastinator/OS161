@@ -34,8 +34,6 @@ inline size_t max(size_t a, size_t b);
 
 inline size_t min(size_t a, size_t b);
 
-void a2_sys_close_stub(struct pfh_data* pfh);
-
 /*syscall handler functions*/
 
 int a2_sys_dup2(uint32_t oldfd, uint32_t newfd, int32_t *outfd) {

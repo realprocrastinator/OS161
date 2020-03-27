@@ -48,6 +48,7 @@
 #include <current.h>
 #include <addrspace.h>
 #include <vnode.h>
+#include <file.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -85,6 +86,13 @@ proc_create(const char *name)
 	/* PFH synch variables */
 	proc->pfh_lock = NULL;
 	proc->pfh_lock_refcount = NULL;
+
+	/* variables for a2 adv */
+	proc->retval = proc->pid = 0;
+	proc->userproc = false;
+	proc->parent = NULL;
+	proc->p_proclock = NULL;
+	proc->p_proccv = NULL;
 
 	/* Zero out file table */
 	memset(proc->p_fh, 0, sizeof(struct pfh_data*) * OPEN_MAX);
@@ -135,6 +143,13 @@ proc_destroy(struct proc *proc)
 			// ensure that we don't race with other destructor,
 			// especially regarding the reference counter.
 			lock_acquire(proc->pfh_lock);
+			
+			// close all files (aka decrement their refcount)
+			for(int i=0; i<OPEN_MAX; ++i) {
+				if(proc->p_fh[i])
+					a2_sys_close_stub(proc->p_fh[i]);
+			}
+
 			if(!--*proc->pfh_lock_refcount) {
 				// When the refcount reaches 0, there must be no one else referencing
 				// this lock and refcount. If it does, then we have a SERIOUS bug!
@@ -147,6 +162,12 @@ proc_destroy(struct proc *proc)
 			}
 		}
 	}
+
+	// at this point, no one should hold this lock or CV.
+	if(proc->p_proclock)
+		lock_destroy(proc->p_proclock);
+	if(proc->p_proccv)
+		cv_destroy(proc->p_proccv);
 
 	/* VM fields */
 	if (proc->p_addrspace) {
@@ -254,6 +275,15 @@ proc_create_runprogram(const char *name)
 	*newproc->pfh_lock_refcount = 1;
 	/* end FH synch fields */
 
+	/* other fields related to a2 adv */
+	newproc->userproc = true;
+	newproc->p_proclock = lock_create("p_proclock");
+	if(!newproc->p_proclock)
+		goto error_1;
+	newproc->p_proccv = cv_create("p_proccv");
+	if(!newproc->p_proccv) 
+		goto error_1;
+
 	/*
 	 * Lock the current process to copy its current directory.
 	 * (We don't need to lock the new process, though, as we have
@@ -267,6 +297,11 @@ proc_create_runprogram(const char *name)
 	spinlock_release(&curproc->p_lock);
 
 	return newproc;
+
+error_1: /* jump here if error after creating file handle lock */
+	lock_destroy(newproc->pfh_lock);
+	proc_destroy(newproc);
+	return NULL;
 }
 
 /*
@@ -285,9 +320,13 @@ proc_addthread(struct proc *proc, struct thread *t)
 
 	KASSERT(t->t_proc == NULL);
 
+	if(proc->p_proclock)
+		lock_acquire(proc->p_proclock);
 	spinlock_acquire(&proc->p_lock);
 	proc->p_numthreads++;
 	spinlock_release(&proc->p_lock);
+	if(proc->p_proclock)
+		lock_release(proc->p_proclock);
 
 	spl = splhigh();
 	t->t_proc = proc;
@@ -314,10 +353,18 @@ proc_remthread(struct thread *t)
 	proc = t->t_proc;
 	KASSERT(proc != NULL);
 
+	if(proc->p_proclock)
+		lock_acquire(proc->p_proclock);
 	spinlock_acquire(&proc->p_lock);
 	KASSERT(proc->p_numthreads > 0);
 	proc->p_numthreads--;
 	spinlock_release(&proc->p_lock);
+	if(!proc->p_numthreads)
+		// very likely it is waitpid that is doing the waiting!
+		cv_broadcast(proc->p_proccv, proc->p_proclock);
+	// the moment we release this lock, proc is not safe to access anymore
+	if(proc->p_proclock)
+		lock_release(proc->p_proclock);
 
 	spl = splhigh();
 	t->t_proc = NULL;

@@ -6,6 +6,7 @@
 #include <synch.h>
 #include <current.h>
 #include <kern/errno.h>
+#include <kern/wait.h>
 
 struct fork_child_pass {
     struct lock* lock;
@@ -40,6 +41,9 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     // copy filetables
     child->pfh_lock = curproc->pfh_lock;
     child->pfh_lock_refcount = curproc->pfh_lock_refcount;
+    // after copying, we have to increment the refcount for all file handles
+    // because if at any point we're failing, we'll call the proc_destroy,
+    // which will decrement or close the file.
     memmove(child->p_fh, curproc->p_fh, sizeof(struct pfh_data*)*OPEN_MAX);
 
     // increase the pfh_lock_refcount,
@@ -48,9 +52,19 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     // so it should not be possible for it to eventually call proc_destroy.
     lock_acquire(curproc->pfh_lock);
     ++child->pfh_lock_refcount;
-    // TODO: increase ref count for each file
-    // TODO: decrement lock_refcount upon failure!
+    // increase ref count for each file
+    for(int i=0; i<OPEN_MAX; ++i) {
+        if(child->p_fh[i]) {
+            lock_acquire(child->p_fh[i]->lock);
+            ++child->p_fh[i]->refcount;
+            lock_release(child->p_fh[i]->lock);
+        }
+    }
     lock_release(curproc->pfh_lock);
+
+    // I will be the parent of this child. I have to protect my child from being
+    // waited by anyone else!
+    child->parent = curproc;
 
     // create condition variable to synchronize trap frame copy with the forked child
     struct fork_child_pass passdata;
@@ -87,7 +101,7 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
 error_2: /* jump here if error after cv and lock creation */
     cv_destroy(passdata.cv);
     lock_destroy(passdata.lock);
-error_1: /* jump here if error before cv and lock creation */
+error_1: /* jump here if error before cv and lock creation, but after file refcount */
     // undo all the work!
     as_destroy(child_as);
     proc_destroy(child);
@@ -117,4 +131,58 @@ void enter_forked_process(void* passdata, unsigned long unused) {
 
     // okay, finally, let's go back to mortal's realm!
     mips_usermode(&tf);
+}
+
+int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
+    // we won't check here if we're the child or not. it is the
+    // responsibility of syscall's handler
+
+    int result = 0;
+    // this (will be) the only supported option!
+    bool nohang = options & WNOHANG;
+    if(options < 0 || options > 1)
+        return EINVAL;
+    
+    bool destroy_proc = false;
+    
+    lock_acquire(p->p_proclock);
+    // basically we'll check if numthreads is 0.
+    if(p->p_numthreads) {
+        // if process is running ...
+        if(nohang)
+            // if target process is running, set pid to 0 then return 0 (success)
+            *pid = 0;
+        else {
+            // else, wait until process stops (no more thread)
+            while(p->p_numthreads)
+                cv_wait(p->p_proccv, p->p_proclock);
+            // destroy this process afterwards
+            destroy_proc = true;
+        }
+    } else 
+        // process is already stopped
+        destroy_proc = true;
+
+    // give the return value if we're about to destroy this
+    if(destroy_proc) {
+        *pid = p->pid;
+        if(status)
+            *status = p->retval;
+    }
+    lock_release(p->p_proclock);
+
+    // actually destroy this structure
+    if(destroy_proc)
+        proc_destroy(p);
+
+    return result;
+}
+
+int a2_sys_exit(int32_t status) {
+    // set the return value to the signal number
+	curproc->retval = status;
+
+    // process destruction will be taken care off whoever is waiting for this process,
+	// after we exit this thread
+    thread_exit();
 }

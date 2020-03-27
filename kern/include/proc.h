@@ -82,6 +82,14 @@ struct proc {
 	/* VFS */
 	struct vnode *p_cwd;		/* current working directory */
 
+	/* custom structure for advanced a2 */
+	pid_t pid;
+	struct proc* parent;
+	int retval;
+	bool userproc;
+	struct lock* p_proclock; /* another lock for waitpid */
+	struct cv* p_proccv; /* wokes up waitpid */
+
 	/* add more material here as needed */
 	/* per-process file handle table section */
 	struct lock* pfh_lock; /* process-wide file table lock */
