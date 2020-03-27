@@ -241,9 +241,10 @@ int a2_sys_execv(userptr_t progname, userptr_t* args) {
         result = ENOMEM;
         goto error_3;
     }
-    for(int i=0, j=0; i<argsizetotal; ++i) {
+    argoffsets[0] = 0; /* first string always points to the beginning! */
+    for(int i=0, j=1; j<argcount; ++i) {
         if(!kargdata[i])
-            argoffsets[j++] = i;
+            argoffsets[j++] = i+1;
     }
     
     // create new address space
@@ -271,7 +272,27 @@ int a2_sys_execv(userptr_t progname, userptr_t* args) {
     if(result)
         goto error_5;
 
-    // TODO: copy the arguments to user's stack
+    // copy the arguments to user's stack
+    // first, allocate the stack for the string data
+    size_t userargsbase = (newstackptr -= argsizetotal);
+    // copy the string
+    copyout(kargdata, (userptr_t)newstackptr, argsizetotal);
+    // align to word size
+    newstackptr -= newstackptr % sizeof(void*);
+    // second, allocate stack for the string offsets (again, don't forget the last NULL)
+    newstackptr -= (argcount+1) * sizeof(void*);
+    // copy the offsets
+    size_t* userargsoffsets = (size_t*)newstackptr;
+    for(int i=0; i<argcount; ++i)
+        userargsoffsets[i] = userargsbase + argoffsets[i];
+    // don't forget the terminating NULL as some apps doesn't check from argc
+    userargsoffsets[argcount] = 0;
+    
+    // done copying data to user stack. now begin platform specific ops.
+    // align stack to 8 bytes.
+    newstackptr -= newstackptr % 8;
+    // allocate for first 4 args
+    newstackptr -= 16;
     
     // cleanup (do steps in error_4, error_3, and error_1)
     kfree(argoffsets);
@@ -279,7 +300,8 @@ int a2_sys_execv(userptr_t progname, userptr_t* args) {
     kfree(kprogname);
 
     // go back to the mortal's realm!
-    enter_new_process(0, NULL, NULL, newstackptr, newentrypoint);
+    enter_new_process(argcount, (userptr_t)userargsoffsets, NULL, 
+        newstackptr, newentrypoint);
 
     panic("A supposedly successful execv returned!");
     result = EINVAL;
