@@ -21,4 +21,6 @@ int a2_sys_execv(userptr_t progname, userptr_t* args);
 // note: do not call this function on an already destroyed process!
 int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status);
 
+int a2_sys_getpid(int32_t* pid);
+
 #endif /* _A2ADV_H_ */

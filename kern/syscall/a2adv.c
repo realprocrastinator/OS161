@@ -100,7 +100,7 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     lock_release(passdata.lock);
 
     // OK, we can safely remove this stack by returning success!
-    *pid = 42; /* hardcoded PID. Please implement this */
+    *pid = child->pid ; /* hardcoded PID. Please implement this */
     return 0;
 
 error_2: /* jump here if error after cv and lock creation */
@@ -160,7 +160,7 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
         else {
             // else, wait until process stops (no more thread)
             while(p->p_numthreads)
-                cv_wait(p->p_proccv, p->p_proclock);
+                cv_wait(p->p_proccv,p->p_proclock);
             // destroy this process afterwards
             destroy_proc = true;
         }
@@ -186,6 +186,12 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
 int a2_sys_exit(int32_t status) {
     // set the return value to the signal number
 	curproc->retval = status;
+
+    lock_acquire(pidtable->pid_lock);
+    // deallocate the pid, need to be modified
+    pidtable_rmproc(curproc->pid);
+    cv_broadcast(curproc->parent->proccv,curproc->p_proclock);
+    lock_release(pidtable->pid_lock);
 
     // process destruction will be taken care off whoever is waiting for this process,
 	// after we exit this thread
@@ -320,4 +326,12 @@ error_2: /*jump here if error after opening target executable*/
 error_1: /* jump here if error after allocating kprogname */
     kfree(kprogname);
     return result;
+}
+
+// sys_getpid never fails!
+int a2_sys_getpid(int32_t* pid){
+    lock_acquire(pidtable->pid_lock);
+    *pid = curproc->pid;
+    lock_release(pidtable->pid_lock);
+    return 0;
 }

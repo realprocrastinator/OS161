@@ -49,11 +49,16 @@
 #include <addrspace.h>
 #include <vnode.h>
 #include <file.h>
+#include <kern/errno.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
 struct proc *kproc;
+
+/* global pid tables */
+struct pidtable *pidtable;
+
 
 /*
  * Create a proc structure.
@@ -217,6 +222,9 @@ proc_destroy(struct proc *proc)
 		as_destroy(as);
 	}
 
+	/* deallocate the pid */
+	pid_deallocate(proc->pid);
+
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -234,6 +242,9 @@ proc_bootstrap(void)
 	if (kproc == NULL) {
 		panic("proc_create for kproc failed\n");
 	}
+	
+	// todo initialize the PID table
+	pidtable_init();
 }
 
 /*
@@ -284,6 +295,10 @@ proc_create_runprogram(const char *name)
 	if(!newproc->p_proccv) 
 		goto error_1;
 
+	/* assigned a PID to the newproc, return erro code if nonzero */
+	if(pid_allocate(newproc,(uint32_t *)&newproc->pid))
+		goto error_1;
+
 	/*
 	 * Lock the current process to copy its current directory.
 	 * (We don't need to lock the new process, though, as we have
@@ -298,7 +313,7 @@ proc_create_runprogram(const char *name)
 
 	return newproc;
 
-error_1: /* jump here if error after creating file handle lock */
+error_1: /* jump here if error after creating file handle lock or failed in pid allocation */
 	lock_destroy(newproc->pfh_lock);
 	proc_destroy(newproc);
 	return NULL;
@@ -413,3 +428,116 @@ proc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+
+/* PID table operations */
+void pidtable_init(){
+	// set up the pid table
+	pidtable = kmalloc(sizeof(struct pidtable));
+	if (pidtable == NULL){
+		panic("pid table allocation failed\n");
+	}
+
+	// set up lock
+	pidtable->pid_lock = lock_create("pidtable_lock");
+	if (pidtable->pid_lock == NULL){
+		panic("pid lock allocation failed\n");
+	}
+
+	// set up cv
+	pidtable->pid_cv =  cv_create("pidtable_cv");
+	if (pidtable->pid_cv == NULL){
+		panic("pid cv allocation failed\n");
+	}
+
+	/* set the kernel thread parameters */
+	pidtable->pid_available = 1; /* One space for the kernel process */
+	pidtable->pid_next = PID_MIN;
+	pidtable_addproc(kproc->pid, kproc);
+
+	/* 
+	 * create space for more pids within the table 
+	 * meanwhile increasing the available pids from 2 to 1023
+	 * this is only done by once at the booting stage so there
+	 * wont be any race condition
+	 */
+	for (int i = PID_MIN; i <= PID_MAX; i++){
+		pidtable_rmproc(i);
+	}
+
+}
+
+/* these two functions may have race condition, make sure to make them atomic! */
+
+/* insert the proc to its slot in the pidtable */
+void pidtable_addproc(pid_t pid, struct proc *proc){
+	/* make sure the proc exists */
+	KASSERT(proc != NULL);
+	pidtable->pid_procs[pid] = proc;
+	pidtable->pid_status[pid] = RUNNING;
+	pidtable->pid_waitcode[pid] = (int) NULL;
+	pidtable->pid_available--;
+}
+
+/* remove the proc from the pidtable, because it finished task */
+void pidtable_rmproc(pid_t pid){
+	KASSERT(pid <= PID_MAX && pid >= PID_MIN);
+	// KASSERT(pidtable->pid_procs[pid] != NULL);
+	pidtable->pid_procs[pid] = NULL;
+	pidtable->pid_status[pid] = READY;
+	pidtable->pid_waitcode[pid] = 
+	pidtable->pid_available++;
+}
+
+/* wrapping function to make removing pid atomic */
+void pid_deallocate(pid_t pid){
+	KASSERT(pid <= PID_MAX && pid >= PID_MIN);
+	/* critical region */
+	lock_acquire(pidtable->pid_lock);
+	pidtable_rmproc(pid);
+	lock_release(pidtable->pid_lock);
+}	
+
+
+/* there is no guarantee that allocation of pid is always success
+ * so we need to set the erro code just like other syscalls format
+ * if failed we pass the erro code to the caller. If succeed the 
+ * allocated pid will be stored in the retval.
+ */
+int pid_allocate(struct proc *proc, uint32_t *retval){
+	KASSERT(proc != NULL);
+	int err = 0;
+
+	lock_acquire(pidtable->pid_lock);
+
+	/* it is our duty to make sure running process doesn't above limitation 
+	 * if available slot equals to one which means we have already run out of
+	 * resources, one space is for kernel-only thread
+	 */
+	if(pidtable->pid_available <= 1){
+		err = ENPROC;
+		goto error_1;
+	}
+
+	pidtable_addproc(pidtable->pid_next,proc);
+	*retval = pidtable->pid_next;
+
+	/* find the next empty slot */
+	for (int i = PID_MIN; i <= PID_MAX; i++){
+		if (pidtable->pid_status[i] == READY){
+			/* record this slot as usable for next new proc */
+			pidtable->pid_next = i;
+			break;
+		}
+	}
+
+	/* successfully allocate a pid */
+	lock_release(pidtable->pid_lock);
+	return 0;
+
+error_1:// jump here if running processes exceed maximum
+	lock_release(pidtable->pid_lock);
+	return err;
+
+}
+
+// todo exit && clean zombie

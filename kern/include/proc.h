@@ -97,6 +97,36 @@ struct proc {
 	struct pfh_data* p_fh[OPEN_MAX]; /* Actual file handle table referred by user mode.*/
 };
 
+/*
+* Table index status for pidtable
+*/
+#define READY 0     /* Index available for process */
+#define RUNNING 1   /* Process running */
+#define ZOMBIE 2    /* Process waiting to be reaped */
+
+/* An OS wide pid table tracking the running processes */
+extern struct pidtable *pidtable; // may be modified later, currently allocated on the stack
+
+struct pidtable {
+	struct lock *pid_lock;
+	struct cv *pid_cv;  /* To allow for processes to sleep on waitpid */
+	struct proc *pid_procs[PID_MAX+1]; /* Array to hold processes, currently allocated on the stack */
+	int pid_status[PID_MAX+1]; /* Array to hold process statuses */
+	int pid_available;  /* Number of available pid spaces */
+	int pid_next; /* Lowest free PID */
+};
+
+/* pid operations */
+void pidtable_init(void);
+
+void pid_deallocate(pid_t pid);
+
+int pid_allocate(struct proc *proc, uint32_t *retval);
+
+void pidtable_addproc(pid_t pid, struct proc *proc);
+
+void pidtable_rmproc(pid_t pid);
+
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;
 
