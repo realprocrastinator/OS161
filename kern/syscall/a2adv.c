@@ -56,7 +56,7 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     // when this happens, parent is still held on waiting for this syscall to complete,
     // so it should not be possible for it to eventually call proc_destroy.
     lock_acquire(curproc->pfh_lock);
-    ++child->pfh_lock_refcount;
+    ++*child->pfh_lock_refcount;
     // increase ref count for each file
     for(int i=0; i<OPEN_MAX; ++i) {
         if(child->p_fh[i]) {
@@ -142,6 +142,10 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
     // we won't check here if we're the child or not. it is the
     // responsibility of syscall's handler
 
+    // just successfully enter found my child no need to hold the lock!
+    if (lock_do_i_hold(pidtable->pid_lock))
+        lock_release(pidtable->pid_lock);
+    
     int result = 0;
     // this (will be) the only supported option!
     bool nohang = options & WNOHANG;
@@ -191,18 +195,28 @@ int a2_sys_waitpid(pid_t pid, int* status, int options){
     if (pid < 0 || pid > PID_MAX)
         // return what err?
         return ESRCH;
-    if (!lock_do_i_hold(pidtable->pid_lock))
-        lock_acquire(pidtable->pid_lock);
+    // if (!lock_do_i_hold(pidtable->pid_lock))
+    // lock_acquire(pidtable->pid_lock);
     /* we check if the child has already exited, if yes
      * we just return without calling waitpid stub
      * otherwise we call it
      */
-    if (pidtable->pid_procs[pid] == READY){
-        // todo may be should check if is a zombie?
+    // if (pidtable->pid_status[pid] == READY){
+    //     // todo may be should check if is a zombie?
+    //     lock_release(pidtable->pid_lock);
+    //     return 0;
+    // }
+    // lock_release(pidtable->pid_lock);
+    lock_acquire(pidtable->pid_lock);
+    if (pidtable->pid_procs[pid] == NULL){
+        // proc_destroy(pidtable->pid_procs[pid]);
+        *status = 0;
+        lock_release(pidtable->pid_lock);
         return 0;
     }
-    lock_release(pidtable->pid_lock);
-    return a2_waitpid_stub(pidtable->pid_procs[pid],options,&pid,(int*)status);
+    int result = a2_waitpid_stub(pidtable->pid_procs[pid],options,&pid,(int*)status);
+    
+    return result;
 }
 
 int a2_sys_exit(int32_t status) {

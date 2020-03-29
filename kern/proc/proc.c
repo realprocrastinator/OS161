@@ -451,7 +451,7 @@ void pidtable_init(){
 	}
 
 	/* set the kernel thread parameters */
-	pidtable->pid_available = 1; /* One space for the kernel process */
+	pidtable->pid_available = PID_MAX - PID_MIN + 1; /* One space for the kernel process */
 	pidtable->pid_next = PID_MIN;
 	pidtable_addproc(kproc->pid, kproc);
 
@@ -461,9 +461,7 @@ void pidtable_init(){
 	 * this is only done by once at the booting stage so there
 	 * wont be any race condition
 	 */
-	for (int i = PID_MIN; i <= PID_MAX; i++){
-		pidtable_rmproc(i);
-	}
+	memset(pidtable->pid_procs+PID_MIN,0,PID_MAX-PID_MIN+1);
 
 }
 
@@ -507,14 +505,19 @@ void pid_deallocate(pid_t pid){
 int pid_allocate(struct proc *proc, uint32_t *retval){
 	KASSERT(proc != NULL);
 	int err = 0;
-
+	int i;
 	lock_acquire(pidtable->pid_lock);
 
 	/* it is our duty to make sure running process doesn't above limitation 
 	 * if available slot equals to one which means we have already run out of
 	 * resources, one space is for kernel-only thread
 	 */
-	if(pidtable->pid_available <= 1){
+
+	if(pidtable->pid_next > PID_MAX && pidtable->pid_available){
+		pidtable->pid_next = PID_MIN;
+	}
+
+	if(pidtable->pid_available < 1){
 		err = ENPROC;
 		goto error_1;
 	}
@@ -523,13 +526,15 @@ int pid_allocate(struct proc *proc, uint32_t *retval){
 	*retval = pidtable->pid_next;
 
 	/* find the next empty slot */
-	for (int i = PID_MIN; i <= PID_MAX; i++){
+	for (i = pidtable->pid_next; i <= PID_MAX; i++){
 		if (pidtable->pid_status[i] == READY){
 			/* record this slot as usable for next new proc */
 			pidtable->pid_next = i;
 			break;
 		}
 	}
+
+	
 
 	/* successfully allocate a pid */
 	lock_release(pidtable->pid_lock);
