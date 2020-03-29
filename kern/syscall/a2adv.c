@@ -183,14 +183,32 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
     return result;
 }
 
+int a2_sys_waitpid(pid_t* pid, int *status, int options){
+    if (*pid < 0 || *pid > PID_MAX)
+        // return what err?
+        return ENOMEM;
+    lock_acquire(pidtable->pid_lock);
+    /* we check if the child has already exited, if yes
+     * we just return without calling waitpid stub
+     * otherwise we call it
+     */
+    if (pidtable->pid_procs[*pid] == READY){
+        // todo may be should check if is a zombie?
+        return 0;
+    }
+    lock_release(pidtable->pid_lock);
+    return a2_waitpid_stub(pidtable->pid_procs[*pid],options,pid,status);
+}
+
 int a2_sys_exit(int32_t status) {
     // set the return value to the signal number
 	curproc->retval = status;
-
-    lock_acquire(pidtable->pid_lock);
+    // if the exiting thread is the parent which is the
+    // lock holder, then dont double acquire the lock!
+    if(!lock_do_i_hold(pidtable->pid_lock))
+        lock_acquire(pidtable->pid_lock);
     // deallocate the pid, need to be modified
     pidtable_rmproc(curproc->pid);
-    cv_broadcast(curproc->parent->proccv,curproc->p_proclock);
     lock_release(pidtable->pid_lock);
 
     // process destruction will be taken care off whoever is waiting for this process,

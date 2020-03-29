@@ -112,6 +112,7 @@ struct pidtable {
 	struct cv *pid_cv;  /* To allow for processes to sleep on waitpid */
 	struct proc *pid_procs[PID_MAX+1]; /* Array to hold processes, currently allocated on the stack */
 	int pid_status[PID_MAX+1]; /* Array to hold process statuses */
+	int pid_waitcode[PID_MAX+1]; /* Wait code */
 	int pid_available;  /* Number of available pid spaces */
 	int pid_next; /* Lowest free PID */
 };
