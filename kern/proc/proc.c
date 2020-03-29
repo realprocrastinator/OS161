@@ -374,9 +374,17 @@ proc_remthread(struct thread *t)
 	KASSERT(proc->p_numthreads > 0);
 	proc->p_numthreads--;
 	spinlock_release(&proc->p_lock);
-	if(!proc->p_numthreads)
+	if(!proc->p_numthreads) {
+		// mark this process as zombie
+		if(proc->pid) {
+			lock_acquire(pidtable->pid_lock);
+			if(pidtable->pid_procs[proc->pid] == proc)
+				pidtable->pid_status[proc->pid] = PS_ZOMBIE;
+			lock_release(pidtable->pid_lock);
+		}
 		// very likely it is waitpid that is doing the waiting!
 		cv_broadcast(proc->p_proccv, proc->p_proclock);
+	}
 	// the moment we release this lock, proc is not safe to access anymore
 	if(proc->p_proclock)
 		lock_release(proc->p_proclock);
