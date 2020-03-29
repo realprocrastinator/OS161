@@ -244,7 +244,6 @@ proc_bootstrap(void)
 		panic("proc_create for kproc failed\n");
 	}
 	
-	// todo initialize the PID table
 	pidtable_init();
 }
 
@@ -455,15 +454,12 @@ void pidtable_init(){
 	pidtable->pid_next = PID_MIN;
 
 	/* 
-	 * create space for more pids within the table 
-	 * meanwhile increasing the available pids from 2 to 1023
+	 * initialize the process table.
 	 * this is only done by once at the booting stage so there
-	 * wont be any race condition
+	 * wont be any race condition.
 	 */
-	for (int i = PID_MIN; i <= PID_MAX; i++){
-		pidtable_rmproc(i);
-	}
-
+	memset(pidtable->pid_procs, 0, sizeof(pidtable->pid_procs));
+	memset(pidtable->pid_status, PS_READY, sizeof(pidtable->pid_status));
 }
 
 /* these two functions may have race condition, make sure to make them atomic! */
