@@ -143,7 +143,7 @@ proc_destroy(struct proc *proc)
 	if(proc->pfh_lock_refcount) {
 		if(!*proc->pfh_lock_refcount) {
 			// process was halfway created: lock creation failed.
-			// kfree(proc->pfh_lock_refcount);
+			kfree(proc->pfh_lock_refcount);
 			
 		} else {
 			// ensure that we don't race with other destructor,

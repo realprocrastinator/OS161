@@ -173,6 +173,10 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
         *pid = p->pid;
         if(status)
             *status = p->retval;
+            // result = copyout(&p->retval, (userptr_t) status, sizeof(int32_t));
+            //     if(result){
+            //         return result;
+            //     }
     }
     lock_release(p->p_proclock);
 
@@ -183,22 +187,22 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
     return result;
 }
 
-int a2_sys_waitpid(pid_t* pid, int *status, int options){
-    if (*pid < 0 || *pid > PID_MAX)
+int a2_sys_waitpid(pid_t pid, int* status, int options){
+    if (pid < 0 || pid > PID_MAX)
         // return what err?
-        return ENOMEM;
+        return ESRCH;
     if (!lock_do_i_hold(pidtable->pid_lock))
         lock_acquire(pidtable->pid_lock);
     /* we check if the child has already exited, if yes
      * we just return without calling waitpid stub
      * otherwise we call it
      */
-    if (pidtable->pid_procs[*pid] == READY){
+    if (pidtable->pid_procs[pid] == READY){
         // todo may be should check if is a zombie?
         return 0;
     }
     lock_release(pidtable->pid_lock);
-    return a2_waitpid_stub(pidtable->pid_procs[*pid],options,pid,status);
+    return a2_waitpid_stub(pidtable->pid_procs[pid],options,&pid,(int*)status);
 }
 
 int a2_sys_exit(int32_t status) {
