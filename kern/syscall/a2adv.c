@@ -56,7 +56,7 @@ int a2_sys_fork(int32_t* pid, struct trapframe* tf) {
     // when this happens, parent is still held on waiting for this syscall to complete,
     // so it should not be possible for it to eventually call proc_destroy.
     lock_acquire(curproc->pfh_lock);
-    ++child->pfh_lock_refcount;
+    ++*child->pfh_lock_refcount;
     // increase ref count for each file
     for(int i=0; i<OPEN_MAX; ++i) {
         if(child->p_fh[i]) {
