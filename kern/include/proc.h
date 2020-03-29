@@ -100,9 +100,9 @@ struct proc {
 /*
 * Table index status for pidtable
 */
-#define READY 0     /* Index available for process */
-#define RUNNING 1   /* Process running */
-#define ZOMBIE 2    /* Process waiting to be reaped */
+#define PS_READY 0     /* Index available for process */
+#define PS_RUNNING 1   /* Process running */
+#define PS_ZOMBIE 2    /* Process waiting to be reaped */
 
 /* An OS wide pid table tracking the running processes */
 extern struct pidtable *pidtable; // may be modified later, currently allocated on the stack
@@ -112,7 +112,6 @@ struct pidtable {
 	struct cv *pid_cv;  /* To allow for processes to sleep on waitpid */
 	struct proc *pid_procs[PID_MAX+1]; /* Array to hold processes, currently allocated on the stack */
 	int pid_status[PID_MAX+1]; /* Array to hold process statuses */
-	int pid_waitcode[PID_MAX+1]; /* Wait code */
 	int pid_available;  /* Number of available pid spaces */
 	int pid_next; /* Lowest free PID */
 };
