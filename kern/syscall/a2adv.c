@@ -187,7 +187,8 @@ int a2_sys_waitpid(pid_t* pid, int *status, int options){
     if (*pid < 0 || *pid > PID_MAX)
         // return what err?
         return ENOMEM;
-    lock_acquire(pidtable->pid_lock);
+    if (!lock_do_i_hold(pidtable->pid_lock))
+        lock_acquire(pidtable->pid_lock);
     /* we check if the child has already exited, if yes
      * we just return without calling waitpid stub
      * otherwise we call it

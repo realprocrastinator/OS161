@@ -143,7 +143,8 @@ proc_destroy(struct proc *proc)
 	if(proc->pfh_lock_refcount) {
 		if(!*proc->pfh_lock_refcount) {
 			// process was halfway created: lock creation failed.
-			kfree(proc->pfh_lock_refcount);
+			// kfree(proc->pfh_lock_refcount);
+			
 		} else {
 			// ensure that we don't race with other destructor,
 			// especially regarding the reference counter.
@@ -484,7 +485,7 @@ void pidtable_rmproc(pid_t pid){
 	// KASSERT(pidtable->pid_procs[pid] != NULL);
 	pidtable->pid_procs[pid] = NULL;
 	pidtable->pid_status[pid] = READY;
-	pidtable->pid_waitcode[pid] = 
+	pidtable->pid_waitcode[pid] = (int)NULL; // todo
 	pidtable->pid_available++;
 }
 
