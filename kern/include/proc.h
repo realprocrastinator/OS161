@@ -89,7 +89,8 @@ struct proc {
 	bool userproc;
 	struct lock* p_proclock; /* another lock for waitpid */
 	struct cv* p_proccv; /* wokes up waitpid */
-
+	struct array *children; /* my children */
+    bool iskiller; /* set if waitpid get called and destroyed child proc */
 	/* add more material here as needed */
 	/* per-process file handle table section */
 	struct lock* pfh_lock; /* process-wide file table lock */
@@ -117,15 +118,24 @@ struct pidtable {
 };
 
 /* pid operations */
-void pidtable_init(void);
 
+/* deallocate pid protected by lock */
 void pid_deallocate(pid_t pid);
 
+/* allocate pid protected by lock */
 int pid_allocate(struct proc *proc, uint32_t *retval);
 
+/* call once to init the data structure of pid table */
+void pidtable_init(void);
+
+/* attach pid to the proc */
 void pidtable_addproc(pid_t pid, struct proc *proc);
 
+/* dettach the pid with the proc */
 void pidtable_rmproc(pid_t pid);
+
+/* clean up zombie child */
+void pidtable_cleanup(struct proc *proc);
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;

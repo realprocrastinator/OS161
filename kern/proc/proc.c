@@ -50,6 +50,7 @@
 #include <vnode.h>
 #include <file.h>
 #include <kern/errno.h>
+#include <array.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -93,11 +94,17 @@ proc_create(const char *name)
 	proc->pfh_lock_refcount = NULL;
 
 	/* variables for a2 adv */
-	proc->retval = proc->pid = 0;
+	proc->retval = proc->pid = proc->iskiller = 0;
 	proc->userproc = false;
 	proc->parent = NULL;
 	proc->p_proclock = NULL;
 	proc->p_proccv = NULL;
+	proc->children = array_create();
+	if (proc->children == NULL) {
+		kfree(proc);
+		kfree(proc->p_name);
+		return NULL;
+	}
 
 	/* Zero out file table */
 	memset(proc->p_fh, 0, sizeof(struct pfh_data*) * OPEN_MAX);
@@ -174,6 +181,13 @@ proc_destroy(struct proc *proc)
 		lock_destroy(proc->p_proclock);
 	if(proc->p_proccv)
 		cv_destroy(proc->p_proccv);
+	
+	/* cleanup children */
+	int children_size = array_num(proc->children);
+	for (int i = 0; i < children_size; i++){
+		array_remove(proc->children, 0);
+	}
+	array_destroy(proc->children);
 
 	/* VM fields */
 	if (proc->p_addrspace) {
@@ -223,9 +237,6 @@ proc_destroy(struct proc *proc)
 		as_destroy(as);
 	}
 
-	/* deallocate the pid */
-	pid_deallocate(proc->pid);
-
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -243,8 +254,6 @@ proc_bootstrap(void)
 	if (kproc == NULL) {
 		panic("proc_create for kproc failed\n");
 	}
-	
-	pidtable_init();
 }
 
 /*
@@ -375,7 +384,7 @@ proc_remthread(struct thread *t)
 	proc->p_numthreads--;
 	spinlock_release(&proc->p_lock);
 	if(!proc->p_numthreads) {
-		// mark this process as zombie
+		/* mark this process as zombie */
 		if(proc->pid) {
 			lock_acquire(pidtable->pid_lock);
 			if(pidtable->pid_procs[proc->pid] == proc)
@@ -485,7 +494,7 @@ void pidtable_addproc(pid_t pid, struct proc *proc){
 void pidtable_rmproc(pid_t pid){
 	KASSERT(pid <= PID_MAX && pid >= PID_MIN);
 	// KASSERT(pidtable->pid_procs[pid] != NULL);
-	pidtable->pid_procs[pid] = NULL;
+	// pidtable->pid_procs[pid] = NULL;
 	pidtable->pid_status[pid] = PS_READY;
 	pidtable->pid_available++;
 }
@@ -508,7 +517,6 @@ void pid_deallocate(pid_t pid){
 int pid_allocate(struct proc *proc, uint32_t *retval){
 	KASSERT(proc != NULL);
 	int err = 0;
-	int i;
 	lock_acquire(pidtable->pid_lock);
 
 	/* it is our duty to make sure running process doesn't above limitation 
@@ -524,12 +532,17 @@ int pid_allocate(struct proc *proc, uint32_t *retval){
 	for(int i = 0; i < pidtable->pid_available; ++i) {
 		if(pidtable->pid_status[pidtable->pid_next] == PS_READY)
 			break;
-		// wraparound increment
 		if(++pidtable->pid_next > PID_MAX)
 			pidtable->pid_next = PID_MIN;
 	}
-
+	
+	/* now add this child to my children list */
+	err = array_add(curproc->children, proc, NULL);
+	if (err){
+		goto error_1;
+	}
 	pidtable_addproc(pidtable->pid_next, proc);
+	
 	*retval = pidtable->pid_next;
 
 	/* successfully allocate a pid */
@@ -541,5 +554,38 @@ error_1:// jump here if running processes exceed maximum
 	return err;
 }
 
-// TODO: exit && clean zombie
-// TODO: mark parent field in children to NULL if parent exit first
+
+/* when this function get called, either our parent have already exited
+ * first without waiting for me, I became an orphan or I exited first and
+ * I will become a zombie! So before I become a zombie I need to clean up my
+ * zombie children only if I didn't wait for them finished their tasks. 
+ */
+void pidtable_cleanup(struct proc *proc){
+	if(proc) {
+		struct proc* mychild; 
+
+		lock_acquire(pidtable->pid_lock);
+		uint32_t i = 0;
+		while(i < array_num(proc->children)){
+			mychild = array_get(proc->children, i);
+			if (mychild){
+				/* tell my children you are orphans now! */
+				mychild->parent = NULL;
+
+				/* kill my zombie child! */
+				// if we have destroyed our child proc after being waken up
+    			// then no need to kill it twice, if proc came from waitpid()
+				// then the its children must be orphan, let them suicide
+				if(!proc->iskiller && pidtable->pid_status[mychild->pid] == PS_ZOMBIE){
+					pidtable_rmproc(mychild->pid);	
+					proc_destroy(mychild);
+				}
+			}
+			i++;
+		}
+		
+		lock_release(pidtable->pid_lock);			
+	}	
+}
+
+

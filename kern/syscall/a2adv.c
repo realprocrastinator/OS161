@@ -182,38 +182,35 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
     }
     lock_release(p->p_proclock);
 
-    // remove entry from master PID table
-    lock_acquire(pidtable->pid_lock);
-    // before removing the entry in the PID table,
-    // ensure that the entry belong to this process
-    if(pidtable->pid_procs[p->pid] == p)
-        pidtable_rmproc(p->pid);
-    lock_release(pidtable->pid_lock);
-
     // actually destroy this structure
-    if(destroy_proc)
-        proc_destroy(p);
+    if(destroy_proc){
+        // remove entry from master PID table
+        lock_acquire(pidtable->pid_lock);
+        // before removing the entry in the PID table,
+        // ensure that the entry belong to this process
+        if(pidtable->pid_procs[p->pid] == p)
+            pidtable_rmproc(p->pid);
+        lock_release(pidtable->pid_lock);
 
+        curproc->iskiller = 1;
+        proc_destroy(p);
+    }
     return result;
 }
 
 int a2_sys_waitpid(pid_t pid, int32_t* pidret, userptr_t ustatus, int options){
-    int result, status;
-    if (pid < 0 || pid > PID_MAX)
-        return ESRCH;
-
-    struct proc* target;
-    
+    int result = 0, status = 0;
+    /* make sure the given pid is valid */
     lock_acquire(pidtable->pid_lock);
-    target = pidtable->pid_procs[pid];
-    /* we check if the child has already exited, if yes
-     * we just return without calling waitpid stub
-     * otherwise we call it
-     */
-    if (pidtable->pid_status[pid] == PS_READY){
+    if (pid < 0 || pid > PID_MAX){
         result = ESRCH;
         goto error_1;
     }
+
+    struct proc* target;
+    
+    target = pidtable->pid_procs[pid];
+
 
     /* ensure that we're the parent of the child */
     if(target->parent != curproc) {
@@ -225,7 +222,12 @@ int a2_sys_waitpid(pid_t pid, int32_t* pidret, userptr_t ustatus, int options){
     result = a2_waitpid_stub(target, options, pidret, &status);
     // copy status code if succeeded waiting and user requested it
     if(!result && ustatus) {
-        copyout(&status, ustatus, sizeof(int));
+        /* if the userptr is invalid we should return EFAUL
+         * memory check is done by copyout().
+         */
+        result = copyout(&status, ustatus, sizeof(int));
+        if (result)
+            goto error_1;
     }
     return result;
 
@@ -236,11 +238,16 @@ error_1: /* jump here after acquiring locks */
 
 int a2_sys_exit(int32_t status) {
     // set the return value to the signal number
-	curproc->retval = status;
-
+    struct proc* cur = curproc;
+    cur->retval = status;
+    
+    /* cleanup the zombie child */
+    pidtable_cleanup(cur);   
+    
     // process destruction will be taken care off whoever is waiting for this process,
 	// after we exit this thread
     thread_exit();
+    panic("Exit syscall should never get to this point.");
 }
 
 int a2_sys_execv(userptr_t progname, userptr_t* args) {
