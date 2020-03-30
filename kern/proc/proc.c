@@ -244,7 +244,6 @@ proc_bootstrap(void)
 		panic("proc_create for kproc failed\n");
 	}
 	
-	// todo initialize the PID table
 	pidtable_init();
 }
 
@@ -375,9 +374,17 @@ proc_remthread(struct thread *t)
 	KASSERT(proc->p_numthreads > 0);
 	proc->p_numthreads--;
 	spinlock_release(&proc->p_lock);
-	if(!proc->p_numthreads)
+	if(!proc->p_numthreads) {
+		// mark this process as zombie
+		if(proc->pid) {
+			lock_acquire(pidtable->pid_lock);
+			if(pidtable->pid_procs[proc->pid] == proc)
+				pidtable->pid_status[proc->pid] = PS_ZOMBIE;
+			lock_release(pidtable->pid_lock);
+		}
 		// very likely it is waitpid that is doing the waiting!
 		cv_broadcast(proc->p_proccv, proc->p_proclock);
+	}
 	// the moment we release this lock, proc is not safe to access anymore
 	if(proc->p_proclock)
 		lock_release(proc->p_proclock);
@@ -451,18 +458,16 @@ void pidtable_init(){
 	}
 
 	/* set the kernel thread parameters */
-	pidtable->pid_available = PID_MAX - PID_MIN + 1; /* One space for the kernel process */
+	pidtable->pid_available = PID_MAX - PID_MIN + 1;
 	pidtable->pid_next = PID_MIN;
-	pidtable_addproc(kproc->pid, kproc);
 
 	/* 
-	 * create space for more pids within the table 
-	 * meanwhile increasing the available pids from 2 to 1023
+	 * initialize the process table.
 	 * this is only done by once at the booting stage so there
-	 * wont be any race condition
+	 * wont be any race condition.
 	 */
-	memset(pidtable->pid_procs+PID_MIN,0,PID_MAX-PID_MIN+1);
-
+	memset(pidtable->pid_procs, 0, sizeof(pidtable->pid_procs));
+	memset(pidtable->pid_status, PS_READY, sizeof(pidtable->pid_status));
 }
 
 /* these two functions may have race condition, make sure to make them atomic! */
@@ -472,8 +477,7 @@ void pidtable_addproc(pid_t pid, struct proc *proc){
 	/* make sure the proc exists */
 	KASSERT(proc != NULL);
 	pidtable->pid_procs[pid] = proc;
-	pidtable->pid_status[pid] = RUNNING;
-	pidtable->pid_waitcode[pid] = (int) NULL;
+	pidtable->pid_status[pid] = PS_RUNNING;
 	pidtable->pid_available--;
 }
 
@@ -482,8 +486,7 @@ void pidtable_rmproc(pid_t pid){
 	KASSERT(pid <= PID_MAX && pid >= PID_MIN);
 	// KASSERT(pidtable->pid_procs[pid] != NULL);
 	pidtable->pid_procs[pid] = NULL;
-	pidtable->pid_status[pid] = READY;
-	pidtable->pid_waitcode[pid] = (int)NULL; // todo
+	pidtable->pid_status[pid] = PS_READY;
 	pidtable->pid_available++;
 }
 
@@ -512,29 +515,22 @@ int pid_allocate(struct proc *proc, uint32_t *retval){
 	 * if available slot equals to one which means we have already run out of
 	 * resources, one space is for kernel-only thread
 	 */
-
-	if(pidtable->pid_next > PID_MAX && pidtable->pid_available){
-		pidtable->pid_next = PID_MIN;
-	}
-
-	if(pidtable->pid_available < 1){
+	if(!pidtable->pid_available) {
 		err = ENPROC;
 		goto error_1;
 	}
 
-	pidtable_addproc(pidtable->pid_next,proc);
-	*retval = pidtable->pid_next;
-
-	/* find the next empty slot */
-	for (i = pidtable->pid_next; i <= PID_MAX; i++){
-		if (pidtable->pid_status[i] == READY){
-			/* record this slot as usable for next new proc */
-			pidtable->pid_next = i;
+	/* find the next empty slot (guaranteed to be exists, otherwise, bug!) */
+	for(int i = 0; i < pidtable->pid_available; ++i) {
+		if(pidtable->pid_status[pidtable->pid_next] == PS_READY)
 			break;
-		}
+		// wraparound increment
+		if(++pidtable->pid_next > PID_MAX)
+			pidtable->pid_next = PID_MIN;
 	}
 
-	
+	pidtable_addproc(pidtable->pid_next, proc);
+	*retval = pidtable->pid_next;
 
 	/* successfully allocate a pid */
 	lock_release(pidtable->pid_lock);
@@ -543,7 +539,7 @@ int pid_allocate(struct proc *proc, uint32_t *retval){
 error_1:// jump here if running processes exceed maximum
 	lock_release(pidtable->pid_lock);
 	return err;
-
 }
 
-// todo exit && clean zombie
+// TODO: exit && clean zombie
+// TODO: mark parent field in children to NULL if parent exit first

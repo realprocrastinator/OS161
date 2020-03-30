@@ -109,6 +109,8 @@ error_2: /* jump here if error after cv and lock creation */
 error_1: /* jump here if error before cv and lock creation, but after file refcount */
     // undo all the work!
     as_destroy(child_as);
+    if(child->pid)
+        pid_deallocate(child->pid);
     proc_destroy(child);
     return result;
 }
@@ -164,7 +166,7 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
         else {
             // else, wait until process stops (no more thread)
             while(p->p_numthreads)
-                cv_wait(p->p_proccv,p->p_proclock);
+                cv_wait(p->p_proccv, p->p_proclock);
             // destroy this process afterwards
             destroy_proc = true;
         }
@@ -177,12 +179,16 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
         *pid = p->pid;
         if(status)
             *status = p->retval;
-            // result = copyout(&p->retval, (userptr_t) status, sizeof(int32_t));
-            //     if(result){
-            //         return result;
-            //     }
     }
     lock_release(p->p_proclock);
+
+    // remove entry from master PID table
+    lock_acquire(pidtable->pid_lock);
+    // before removing the entry in the PID table,
+    // ensure that the entry belong to this process
+    if(pidtable->pid_procs[p->pid] == p)
+        pidtable_rmproc(p->pid);
+    lock_release(pidtable->pid_lock);
 
     // actually destroy this structure
     if(destroy_proc)
@@ -191,44 +197,46 @@ int a2_waitpid_stub(struct proc* p, int options, pid_t* pid, int* status) {
     return result;
 }
 
-int a2_sys_waitpid(pid_t pid, int* status, int options){
+int a2_sys_waitpid(pid_t pid, int32_t* pidret, userptr_t ustatus, int options){
+    int result, status;
     if (pid < 0 || pid > PID_MAX)
-        // return what err?
         return ESRCH;
-    // if (!lock_do_i_hold(pidtable->pid_lock))
-    // lock_acquire(pidtable->pid_lock);
+
+    struct proc* target;
+    
+    lock_acquire(pidtable->pid_lock);
+    target = pidtable->pid_procs[pid];
     /* we check if the child has already exited, if yes
      * we just return without calling waitpid stub
      * otherwise we call it
      */
-    // if (pidtable->pid_status[pid] == READY){
-    //     // todo may be should check if is a zombie?
-    //     lock_release(pidtable->pid_lock);
-    //     return 0;
-    // }
-    // lock_release(pidtable->pid_lock);
-    lock_acquire(pidtable->pid_lock);
-    if (pidtable->pid_procs[pid] == NULL){
-        // proc_destroy(pidtable->pid_procs[pid]);
-        *status = 0;
-        lock_release(pidtable->pid_lock);
-        return 0;
+    if (pidtable->pid_status[pid] == PS_READY){
+        result = ESRCH;
+        goto error_1;
     }
-    int result = a2_waitpid_stub(pidtable->pid_procs[pid],options,&pid,(int*)status);
+
+    /* ensure that we're the parent of the child */
+    if(target->parent != curproc) {
+        result = ECHILD;
+        goto error_1;
+    }
+    lock_release(pidtable->pid_lock);
     
+    result = a2_waitpid_stub(target, options, pidret, &status);
+    // copy status code if succeeded waiting and user requested it
+    if(!result && ustatus) {
+        copyout(&status, ustatus, sizeof(int));
+    }
+    return result;
+
+error_1: /* jump here after acquiring locks */
+    lock_release(pidtable->pid_lock);
     return result;
 }
 
 int a2_sys_exit(int32_t status) {
     // set the return value to the signal number
 	curproc->retval = status;
-    // if the exiting thread is the parent which is the
-    // lock holder, then dont double acquire the lock!
-    if(!lock_do_i_hold(pidtable->pid_lock))
-        lock_acquire(pidtable->pid_lock);
-    // deallocate the pid, need to be modified
-    pidtable_rmproc(curproc->pid);
-    lock_release(pidtable->pid_lock);
 
     // process destruction will be taken care off whoever is waiting for this process,
 	// after we exit this thread
@@ -367,8 +375,6 @@ error_1: /* jump here if error after allocating kprogname */
 
 // sys_getpid never fails!
 int a2_sys_getpid(int32_t* pid){
-    lock_acquire(pidtable->pid_lock);
     *pid = curproc->pid;
-    lock_release(pidtable->pid_lock);
     return 0;
 }
